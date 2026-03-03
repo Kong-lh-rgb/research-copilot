@@ -1,0 +1,65 @@
+import logging
+import os
+from functools import lru_cache
+from typing import Any,Dict,List,Optional
+from dotenv import load_dotenv
+from openai import OpenAI
+from app.shared.errors import LLMServiceError
+
+load_dotenv()
+logger = logging.getLogger(__name__)
+
+
+
+
+
+class LLMConfigError(RuntimeError):
+    pass
+
+class LLMClient:
+    def __init__(
+        self,
+        api_key:Optional[str]=None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+    )->None:
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
+        self._model = model or os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+        if not self.api_key:
+            raise LLMConfigError("未设置第三方模型API")
+
+        self._client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url or None,
+        )
+    @property
+    def model(self)->str:
+        return self._model
+    
+    def chat(
+        self,
+        messages:List[Dict[str,Any]],
+        system:Optional[str]=None,
+        tools:Optional[List[Dict[str,Any]]]=None,
+        tool_choice:Optional[str]=None,
+
+    ) -> Dict[str, Any]:
+        logger.debug("模型请求: %s", {"messages": messages, "tools": tools})
+        try:
+            resp = self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+        except Exception as e:
+            raise LLMServiceError(f"模型请求失败: {e}") from e
+        logger.debug("模型响应: %s", getattr(resp, "id", ""))
+        # 转成普通 dict，方便在 LangGraph 状态里使用
+        return resp.model_dump()
+
+@lru_cache(maxsize=1)
+def get_llm() -> LLMClient:
+
+    return LLMClient()
