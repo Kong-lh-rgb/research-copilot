@@ -1,0 +1,30 @@
+{
+  "id": "chatcmpl-aa0f6719-68b2-97ea-83a6-ddc0cf87948b",
+  "object": "chat.completion",
+  "model": "qwen3.5-flash",
+  "created": 1772610414,
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "{\"intent\": \"complex_research\", \"direct_answer\": \"\"}",
+        "reasoning_content": "（模型内部思考过程，省略）",
+        "tool_calls": null,
+        "function_call": null,
+        "refusal": null
+      },
+      "logprobs": null
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 147,
+    "completion_tokens": 691,
+    "total_tokens": 838,
+    "completion_tokens_details": {
+      "reasoning_tokens": 672,
+      "text_tokens": 691
+    }
+  }
+}
