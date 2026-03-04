@@ -1,4 +1,4 @@
-from app.infrastructure.llm.llm import get_llm
+from app.llm.client import get_llm
 
 def test_llm():
     llm = get_llm()

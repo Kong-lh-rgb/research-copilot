@@ -46,15 +46,20 @@ class LLMClient:
         system: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
+        temperature: Optional[float] = None,
     ) -> Dict[str, Any]:
         logger.debug("模型请求: %s", {"messages": messages, "tools": tools})
+        request_payload: Dict[str, Any] = {
+            "model": self._model,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": tool_choice,
+        }
+        if temperature is not None:
+            request_payload["temperature"] = temperature
+
         try:
-            resp = self._client.chat.completions.create(
-                model=self._model,
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice,
-            )
+            resp = self._client.chat.completions.create(**request_payload)
             logger.info("模型响应: %s", resp.model_dump())
         except Exception as e:
             raise LLMServiceError(f"模型请求失败: {e}") from e

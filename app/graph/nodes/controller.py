@@ -1,51 +1,46 @@
 import logging
 import json
 import re
-from app.graph.prompts import CONTROLLER_PROMPTS
-from app.infrastructure.llm.llm import get_llm
+from app.llm.prompts import CONTROLLER_PROMPTS
+from app.llm.wrapper import call_llm
 from app.graph.state import AgentState
 
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_intent_from_text(answer: str) -> str:
+    if not answer:
+        raise ValueError("模型未返回可解析的文本内容")
+
+    clean_text = answer.replace("```json", "").replace("```", "").strip()
+    if not clean_text.startswith("{"):
+        match = re.search(r"\{[\s\S]*\}", clean_text)
+        if match:
+            clean_text = match.group(0)
+
+    result = json.loads(clean_text)
+    return result.get("intent", "")
+
+
 def controller_node(state: AgentState) -> dict:
-    user_input = state.get("user_input","")
+    user_input = state.get("user_input", "")
     logger.info(f"接收用户请求：{user_input}")
 
-    client = get_llm()
-    full_prompt = CONTROLLER_PROMPTS.format(user_input=user_input)
-
     try:
-        res = client.chat(
-            messages=[{"role": "user", "content": full_prompt}]
+        system_prompt = CONTROLLER_PROMPTS
+        res = call_llm(
+            messages=[{"role": "user", "content": user_input}],
+            system=system_prompt
         )
-        choices = res.get("choices", [])
-        answer = ""
-        if choices:
-            answer = (choices[0].get("message", {}) or {}).get("content", "") or ""
+        if res.get("error"):
+            raise ValueError(res["error"])
 
-        if not answer:
-            raise ValueError("模型未返回可解析的文本内容")
-
-        clean_text = answer.replace("```json", "").replace("```", "").strip()
-        if not clean_text.startswith("{"):
-            match = re.search(r"\{[\s\S]*\}", clean_text)
-            if match:
-                clean_text = match.group(0)
-
-        result = json.loads(clean_text)
-
-        intent = result.get("intent")
+        intent = _parse_intent_from_text(res.get("content", "") or "")
         logger.info(f"解析用户意图：{intent}")
 
-        if intent == "complex_research":
-            return {
-                "next_action": "complex_research",
-            }
-        else:
-            return {
-                "next_action":"simple_chat",
-            }
+        next_action = "complex_research" if intent == "complex_research" else "simple_chat"
+        return {"next_action": next_action}
             
     except Exception as e:
         logger.error(f"❌ [Controller] 解析大模型路由指令失败: {e}")
