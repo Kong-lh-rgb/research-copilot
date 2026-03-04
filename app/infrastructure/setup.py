@@ -5,7 +5,7 @@ import os
 from typing import Any, Dict, List, Optional
 from mcp.types import Tool
 
-from app.infrastructure.mcp.client import MCPToolClient
+from app.infrastructure.client import MCPToolClient
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +73,8 @@ class MCPRegistry:
         logger.info("🚀 开始读取配置文件并初始化 MCP 注册中心...")
         
         # 定位项目根目录下的 mcp_servers.json
-        # 当前路径: app/infrastructure/mcp/setup.py，往上退三层到项目根目录
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+        # 当前路径: app/infrastructure/setup.py，往上退两层到项目根目录
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
         config_path = os.path.join(base_dir, 'mcp_servers.json')
         
         if not os.path.exists(config_path):
