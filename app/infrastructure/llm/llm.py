@@ -1,5 +1,6 @@
 import logging
 import os
+os.environ["NO_PROXY"] = "aliyuncs.com,dashscope.aliyuncs.com"
 from functools import lru_cache
 from typing import Any,Dict,List,Optional
 from dotenv import load_dotenv

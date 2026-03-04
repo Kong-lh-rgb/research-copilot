@@ -22,9 +22,7 @@ class MCPToolClient:
         self._session: Optional['ClientSession'] = None
         self._exit_stack = AsyncExitStack()
 
-    # ==========================================
-    # 🌟 新增：优雅的语言环境工厂方法
-    # ==========================================
+
 
     @classmethod
     def from_npx(cls, package: str, args: Optional[List[str]] = None, env: Optional[Dict[str, str]] = None) -> "MCPToolClient":
@@ -32,7 +30,7 @@ class MCPToolClient:
         专门用于启动 Node.js (npx) 编写的 MCP Server
         例如: MCPToolClient.from_npx("@modelcontextprotocol/server-brave-search")
         """
-        # -y 参数是为了自动确认安装包，防止进程卡在等待用户输入 Y/n
+
         full_args = ["-y", package]
         if args:
             full_args.extend(args)
@@ -44,15 +42,13 @@ class MCPToolClient:
         专门用于启动 Python (uv) 编写的 MCP Server
         例如: MCPToolClient.from_python("mcp-server-sqlite", args=["--db", "test.db"])
         """
-        # 这里默认使用你环境里安装的 uv 来启动，速度最快且依赖隔离最好
+
         full_args = ["run", script_or_package]
         if args:
             full_args.extend(args)
         return cls(command="uv", args=full_args, env=env)
 
-    # ==========================================
-    # 核心生命周期方法 (保持不变)
-    # ==========================================
+
 
     async def start(self) -> None:
         """1. 启动服务并握手"""
