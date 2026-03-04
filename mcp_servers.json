@@ -1,0 +1,14 @@
+{
+    "mcpServers": {
+        "weather": {
+        "command": "/Users/linghang/.local/bin/uv",
+        "args": [
+            "--directory",
+            "/Users/linghang/agent/MCP/weather",
+            "run",
+            "weather.py"
+            ]
+        }
+    }
+}
+
