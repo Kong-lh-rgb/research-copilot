@@ -8,3 +8,8 @@ CONTROLLER_PROMPTS="""
         "direct_answer": "如果是 simple_chat，这里写下你的直接回答；如果是 complex_research，这里留空"
     }}
     """
+
+PLANNER_PROMPTS="""
+    你的任务是将用户的输入拆解成一个有序的任务列表，每个任务都应该包含以下字段：
+    
+    """
