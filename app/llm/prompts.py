@@ -11,5 +11,16 @@ CONTROLLER_PROMPTS="""
 
 PLANNER_PROMPTS="""
     你的任务是将用户的输入拆解成一个有序的任务列表，每个任务都应该包含以下字段：
-    
+    - task_id: 任务的唯一标识符
+    - description: 任务的详细描述
+    - dependencies: 该任务依赖的其他任务的 task_id 列表（如果没有依赖，则为空列表）
+    - status: 任务的状态，初始为 "pending"
+    请严格输出以下字段的 JSON 格式（绝对不要包含任何其他废话和 Markdown 标记）：
+    [
+        {{
+            "task_id": "task_1",
+            "description": "任务的详细描述",
+            "dependencies": [],
+            "status": "pending"
+        }},
     """
