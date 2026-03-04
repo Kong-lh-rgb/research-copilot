@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, List, Optional
 from contextlib import AsyncExitStack
-
+import asyncio
 from mcp.client.session import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
 from mcp.types import Tool
@@ -80,6 +80,16 @@ class MCPToolClient:
         return await self._session.call_tool(name, arguments)
 
     async def close(self) -> None:
-        """4. 优雅关闭"""
-        await self._exit_stack.aclose()
-        logger.info("🛑 MCP 连接已关闭")
+        """4. 优雅关闭：断开连接并清理资源"""
+        try:
+            await self._exit_stack.aclose()
+        except RuntimeError:
+            # 忽略 anyio 库因为跨方法调用导致的取消作用域警告
+            pass
+        except asyncio.CancelledError:
+            # 👈 新增：拦截 Python 底层的任务取消信号
+            pass
+        except Exception as e:
+            logger.debug(f"关闭连接时出现未知警告: {e}")
+            
+        logger.info("🛑 MCP 连接已安全关闭")
