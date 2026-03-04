@@ -1,14 +1,25 @@
 {
-    "mcpServers": {
-        "weather": {
-        "command": "/Users/linghang/.local/bin/uv",
-        "args": [
-            "--directory",
-            "/Users/linghang/agent/MCP/weather",
-            "run",
-            "weather.py"
-            ]
-        }
+  "mcpServers": {
+    "weather": {
+      "command": "/Users/linghang/.local/bin/uv",
+      "args": [
+        "--directory",
+        "/Users/linghang/agent/MCP/weather",
+        "run",
+        "weather.py"
+      ]
+    },
+    "amap-maps": {
+      "command": "/usr/local/bin/npx",
+      "args": [
+        "-y",
+        "@amap/amap-maps-mcp-server"
+      ],
+      "env": {
+        "AMAP_MAPS_API_KEY": "a5eaa437e504547a237fb50823fb6eb2",
+        "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+      }
     }
+  }
 }
 

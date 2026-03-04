@@ -13,6 +13,61 @@ class MCPRegistry:
     def __init__(self):
         self.clients:Dict[str, MCPToolClient] = {}
         self.tool_routing_table: Dict[str, str] = {}
+
+    def _build_client_from_config(self, server_name: str, server_config: Dict[str, Any]) -> MCPToolClient:
+        env = server_config.get("env")
+
+        # 兼容格式 A（底层直连格式）
+        # {
+        #   "command": "npx|uv|python|...",
+        #   "args": [...],
+        #   "env": {...}
+        # }
+        if "command" in server_config:
+            command = server_config.get("command")
+            args = server_config.get("args", [])
+            if not command:
+                raise ValueError(f"服务 [{server_name}] 缺少有效 command")
+            if not isinstance(args, list):
+                raise ValueError(f"服务 [{server_name}] 的 args 必须是数组")
+            return MCPToolClient(command=command, args=args, env=env)
+
+        # 兼容格式 B（语义化格式）
+        # Node:
+        # {
+        #   "type": "node",
+        #   "package": "@scope/server-name",
+        #   "args": [...],
+        #   "env": {...}
+        # }
+        # Python:
+        # {
+        #   "type": "python",
+        #   "script_or_package": "mcp-server-sqlite",
+        #   "args": [...],
+        #   "env": {...}
+        # }
+        server_type = server_config.get("type")
+        args = server_config.get("args", [])
+        if not isinstance(args, list):
+            raise ValueError(f"服务 [{server_name}] 的 args 必须是数组")
+
+        if server_type == "node":
+            package = server_config.get("package")
+            if not package:
+                raise ValueError(f"Node 服务 [{server_name}] 缺少 package")
+            return MCPToolClient.from_npx(package=package, args=args, env=env)
+
+        if server_type == "python":
+            script_or_package = server_config.get("script_or_package") or server_config.get("script") or server_config.get("package")
+            if not script_or_package:
+                raise ValueError(f"Python 服务 [{server_name}] 缺少 script_or_package/script/package")
+            return MCPToolClient.from_python(script_or_package=script_or_package, args=args, env=env)
+
+        raise ValueError(
+            f"服务 [{server_name}] 配置格式不支持：请使用 command/args 或 type=node|python"
+        )
+
     async def initialize(self) -> None:
         """读取配置文件，批量启动并注册所有 MCP 服务"""
         logger.info("🚀 开始读取配置文件并初始化 MCP 注册中心...")
@@ -36,13 +91,11 @@ class MCPRegistry:
 
         # 2. 动态实例化客户端
         for server_name, server_config in config.get("mcpServers", {}).items():
-            command = server_config.get("command")
-            args = server_config.get("args", [])
-            env = server_config.get("env")
-            
-            # 使用基础构造函数直接传入底层命令
-            self.clients[server_name] = MCPToolClient(command=command, args=args, env=env)
-            logger.info(f"⏳ 正在注册服务: [{server_name}]...")
+            try:
+                self.clients[server_name] = self._build_client_from_config(server_name, server_config)
+                logger.info(f"⏳ 正在注册服务: [{server_name}]...")
+            except ValueError as e:
+                logger.error(f"❌ 跳过非法配置: {e}")
 
         # 3. 批量启动并构建全局路由表
         for service_name, client in self.clients.items():
