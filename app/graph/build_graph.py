@@ -7,6 +7,7 @@ from app.graph.nodes.worker import worker_node
 from app.graph.state import AgentState
 from langgraph.types import Send
 
+
 def router_after_controller(state:AgentState)->str:
     next_action = state.get("next_action","")
     if next_action == "complex_research":

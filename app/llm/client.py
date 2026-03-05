@@ -61,7 +61,7 @@ class LLMClient:
 
         try:
             resp = await self._client.chat.completions.create(**request_payload)
-            logger.info("模型响应: %s", resp.model_dump())
+            # logger.info("模型响应: %s", resp.model_dump())
         except Exception as e:
             raise LLMServiceError(f"模型请求失败: {e}") from e
 

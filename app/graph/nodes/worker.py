@@ -1,7 +1,8 @@
 import json
 import logging
+from typing import List
 from app.llm.wrapper import call_llm, mcp_tools_to_openai_tools
-from app.graph.state import AgentState
+from app.graph.state import AgentState, ToolCall
 from app.infrastructure.setup import tool_registry
 from app.llm.prompts import WORKER_PROMPT
 
@@ -40,6 +41,8 @@ async def worker_node(state: AgentState) -> dict:
         logger.info(f"🛠️ [Worker] 可用工具: {[t['function']['name'] for t in openai_tools]}")
 
         messages = [{"role": "user", "content": task.description}]
+        collected_tool_calls: List[ToolCall] = []
+        raw_obs_parts: List[str] = []
 
         MAX_ROUNDS = 10
         for round_idx in range(MAX_ROUNDS):
@@ -82,6 +85,14 @@ async def worker_node(state: AgentState) -> dict:
                     tool_output = f"工具调用失败: {e}"
                     logger.error(f"   ❌ 工具 [{tool_name}] 失败: {e}")
 
+                collected_tool_calls.append(ToolCall(
+                    task_id=task_id,
+                    tool_name=tool_name,
+                    arguments=json.dumps(arguments, ensure_ascii=False),
+                    output=tool_output[:400],
+                ))
+                raw_obs_parts.append(f"[{tool_name}] {tool_output}")
+
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
@@ -101,7 +112,12 @@ async def worker_node(state: AgentState) -> dict:
 
         task.status = "completed"
         logger.info(f"✅ [Worker] 任务 {task_id} 执行完成，结果: {str(task.result)[:120]}")
-        return {"tasks": {task_id: task}}
+        return {
+            "tasks": {task_id: task},
+            "tool_history": collected_tool_calls,
+            "task_results": {task_id: task.result or ""},
+            "observations": {task_id: "\n---\n".join(raw_obs_parts)} if raw_obs_parts else {},
+        }
     except Exception as e:
         task.status = "failed"
         task.error = str(e)

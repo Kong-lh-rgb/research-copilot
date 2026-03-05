@@ -10,6 +10,7 @@ dependencies = [
     "asyncpg>=0.31.0",
     "fastapi>=0.135.1",
     "langgraph>=1.0.10",
+    "langgraph-checkpoint-sqlite>=3.0.3",
     "markdown>=3.10.2",
     "mcp[cli]>=1.26.0",
     "openai>=2.24.0",
