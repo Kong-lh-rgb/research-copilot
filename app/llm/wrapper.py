@@ -9,7 +9,7 @@ async def call_llm(
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_choice: Optional[str] = None,
     temperature: float = 0,
-    model: Optional[str] = None, # 传递自定义模型
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     client = get_llm()
 
@@ -17,7 +17,6 @@ async def call_llm(
     if system:
         request_messages = [{"role": "system", "content": system}] + messages
 
-    # 空列表会让部分模型报错，统一转成 None
     effective_tools = tools if tools else None
 
     try:
@@ -53,11 +52,9 @@ def mcp_tools_to_openai_tools(mcp_tools) -> List[Dict[str, Any]]:
     """将 MCP Tool 对象列表映射为 OpenAI function-calling tools 格式"""
     openai_tools = []
     for tool in mcp_tools:
-        # MCP Tool 是 Pydantic 对象，用属性访问而非 dict.get()
         input_schema = getattr(tool, "inputSchema", None)
         if input_schema is None:
             input_schema = {"type": "object", "properties": {}}
-        # Pydantic 对象需 model_dump()，普通 dict 直接用
         if hasattr(input_schema, "model_dump"):
             input_schema = input_schema.model_dump(exclude_none=True)
         openai_tools.append({

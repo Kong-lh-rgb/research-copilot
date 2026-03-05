@@ -84,10 +84,8 @@ class MCPToolClient:
         try:
             await self._exit_stack.aclose()
         except RuntimeError:
-            # 忽略 anyio 库因为跨方法调用导致的取消作用域警告
             pass
         except asyncio.CancelledError:
-            # 👈 新增：拦截 Python 底层的任务取消信号
             pass
         except Exception as e:
             logger.debug(f"关闭连接时出现未知警告: {e}")

@@ -1,4 +1,3 @@
-# finance_server.py
 from mcp.server.fastmcp import FastMCP
 import pandas as pd
 import json
@@ -11,13 +10,11 @@ import markdown
 from email.header import Header
 from datetime import date, timedelta
 from functools import wraps
-
-# ── 代理修复：必须在 import akshare 之前执行 ─────────────────────────────────
-# macOS 系统代理会被 requests 自动读取，即使设了 NO_PROXY 也无效
-# 用 monkey-patch 强制 requests 跳过所有代理检测
 import requests
 import requests.utils
 import urllib.request
+
+
 for _k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
            "ALL_PROXY", "all_proxy", "REQUESTS_CA_BUNDLE"]:
     os.environ.pop(_k, None)
@@ -25,7 +22,7 @@ os.environ["NO_PROXY"] = "*"
 requests.utils.getproxies = lambda: {}
 requests.utils.get_environ_proxies = lambda *a, **kw: {}
 urllib.request.getproxies = lambda: {}
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 import akshare as ak
 from dotenv import load_dotenv
@@ -40,7 +37,7 @@ SMTP_PORT = 465
 mcp = FastMCP("Finance-Data-Server")
 
 
-# ── 缓存器（TTL） ─────────────────────────────────────────────────────────────
+
 def ttl_cache(ttl_seconds):
     def decorator(func):
         cache = {}
@@ -58,32 +55,31 @@ def ttl_cache(ttl_seconds):
     return decorator
 
 
-# ── 带缓存的底层调用（避免重复网络请求）─────────────────────────────────────
-@ttl_cache(ttl_seconds=120)   # A股个股当前信息，2分钟
+
+@ttl_cache(ttl_seconds=120)
 def _a_individual_info(symbol: str):
     return ak.stock_individual_info_em(symbol=symbol)
 
-@ttl_cache(ttl_seconds=300)   # A股历史日K，5分钟
+@ttl_cache(ttl_seconds=300)
 def _a_hist(symbol: str, start: str, end: str):
     return ak.stock_zh_a_hist(symbol=symbol, period="daily",
                               start_date=start, end_date=end, adjust="")
 
-@ttl_cache(ttl_seconds=3600)  # A股财报摘要，1小时
+@ttl_cache(ttl_seconds=3600)
 def _a_financial(symbol: str):
     return ak.stock_financial_abstract(symbol=symbol)
 
-@ttl_cache(ttl_seconds=3600)  # 港股基础信息（雪球），1小时
+@ttl_cache(ttl_seconds=3600)
 def _hk_basic_info(symbol: str):
     return ak.stock_individual_basic_info_hk_xq(symbol=symbol)
 
-@ttl_cache(ttl_seconds=3600)  # 港股财报，1小时
+@ttl_cache(ttl_seconds=3600)
 def _hk_financial(symbol: str):
     return ak.stock_financial_hk_analysis_indicator_em(symbol=symbol)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 工具 1：获取股票当前行情 / 基本信息
-# ─────────────────────────────────────────────────────────────────────────────
+
+
 @mcp.tool()
 def get_stock_spot(symbol: str, market: str = "A") -> str:
     """
@@ -103,16 +99,12 @@ def get_stock_spot(symbol: str, market: str = "A") -> str:
             return json.dumps(info, ensure_ascii=False, default=str)
         else:
             df = _a_individual_info(symbol)
-            # DataFrame 结构：columns=['item','value']，转为字典
             info = dict(zip(df["item"], df["value"]))
             return json.dumps(info, ensure_ascii=False, default=str)
     except Exception as e:
         return json.dumps({"error": f"获取行情失败: {str(e)}"}, ensure_ascii=False)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 工具 2：获取 A 股近期历史行情（港股当前不支持）
-# ─────────────────────────────────────────────────────────────────────────────
 @mcp.tool()
 def get_stock_history(symbol: str, days: int = 30) -> str:
     """
@@ -134,9 +126,6 @@ def get_stock_history(symbol: str, days: int = 30) -> str:
         return json.dumps({"error": f"获取历史行情失败: {str(e)}"}, ensure_ascii=False)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 工具 3：获取财务指标
-# ─────────────────────────────────────────────────────────────────────────────
 @mcp.tool()
 def get_financial_indicators(symbol: str, market: str = "A") -> str:
     """
@@ -164,9 +153,7 @@ def get_financial_indicators(symbol: str, market: str = "A") -> str:
         return json.dumps({"error": f"获取财务指标失败: {str(e)}"}, ensure_ascii=False)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 工具 4：发送邮件
-# ─────────────────────────────────────────────────────────────────────────────
+
 @mcp.tool()
 def send_email(to_address: str, subject: str, content: str) -> str:
     """
@@ -174,10 +161,10 @@ def send_email(to_address: str, subject: str, content: str) -> str:
     当用户要求发送报告时调用此工具。
     """
     try:
-        # 1. 🌟 颜值升级：把大模型输出的 Markdown 转换成 HTML，并开启表格扩展
+
         html_content = markdown.markdown(content, extensions=['tables', 'fenced_code'])
         
-        # 2. 🌟 注入一点点高级 CSS 样式，让表格和字体瞬间变好看
+
         beautiful_html = f"""
         <html>
         <head>
@@ -198,15 +185,14 @@ def send_email(to_address: str, subject: str, content: str) -> str:
         </html>
         """
 
-        # 3. 把格式指定为 'html'
+
         message = MIMEText(beautiful_html, 'html', 'utf-8')
-        
-        # 4. 🌟 解决退信问题：严格使用 formataddr 包装发件人信息
+
         message['From'] = formataddr((str(Header("AI 投研大脑", 'utf-8')), SENDER_EMAIL))
         message['To'] = to_address
         message['Subject'] = Header(subject, 'utf-8')
 
-        # 5. 发送操作
+
         smtp_obj = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT)
         smtp_obj.login(SENDER_EMAIL, SENDER_PASSWORD)
         smtp_obj.sendmail(SENDER_EMAIL, [to_address], message.as_string())

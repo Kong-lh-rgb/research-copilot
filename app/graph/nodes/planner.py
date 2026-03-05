@@ -1,4 +1,3 @@
-#原生openai sdk实现提取用户的需求意图，生成任务列表，并将任务列表存储在状态中
 import json
 import logging
 import re
@@ -12,7 +11,6 @@ logger = logging.getLogger(__name__)
 def _parse_tasks(content: str) -> Dict[str, TaskNode]:
     """将 LLM 返回的 JSON 字符串解析为 Dict[task_id, TaskNode]"""
     clean = content.strip()
-    # 去掉可能的 markdown 代码块
     clean = re.sub(r"```[\w]*", "", clean).strip()
     task_list = json.loads(clean)
     return {

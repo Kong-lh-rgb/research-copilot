@@ -29,8 +29,6 @@ async def controller_node(state: AgentState) -> dict:
 
     try:
         system_prompt = CONTROLLER_PROMPTS
-        # Controller 只负责简单意图路由，不需要复杂的深度思考模型，
-        # 指定使用速度更快、成本更低的基础模型（例如 qwen-plus）
         res = await call_llm(
             messages=[{"role": "user", "content": user_input}],
             system=system_prompt,
@@ -48,7 +46,6 @@ async def controller_node(state: AgentState) -> dict:
     except Exception as e:
         logger.error(f"❌ [Controller] 解析大模型路由指令失败: {e}")
         logger.warning("🛡️ 触发兜底机制：默认将其视为复杂任务进入调研流。")
-        # 兜底容错：哪怕 JSON 解析炸了，业务不能停，硬着头皮让 Planner 去处理
         return {
             "next_action": "planner"
         }

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 class TaskNode:
     task_id: str
     description: str
-    status: str = "pending"  # running completed failed
+    status: str = "pending"
     dependencies: List[str] = field(default_factory=list)
     result: Optional[str] = None
     error: Optional[str] = None

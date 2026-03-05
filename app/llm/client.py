@@ -47,7 +47,7 @@ class LLMClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         temperature: Optional[float] = None,
-        model: Optional[str] = None, # 新增 model 参数，允许覆盖默认模型
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         logger.debug("模型请求: %s", {"messages": messages, "tools": tools, "model": model or self._model})
         request_payload: Dict[str, Any] = {

@@ -17,10 +17,8 @@ async def worker_node(state: AgentState) -> dict:
     if task.status != "running":
         return state
     try:
-        # 1. 获取全局用户输入
         user_input = state.get("user_input", "未提供")
         
-        # 2. 组装前置任务的上下文数据
         dependencies_context = ""
         if task.dependencies:
             for dep_id in task.dependencies:
@@ -30,7 +28,6 @@ async def worker_node(state: AgentState) -> dict:
         if not dependencies_context:
             dependencies_context = "无"
 
-        # 3. 构建新的系统提示词
         system = WORKER_PROMPT.format(
             user_input=user_input,
             dependencies_context=dependencies_context,
@@ -44,8 +41,6 @@ async def worker_node(state: AgentState) -> dict:
 
         messages = [{"role": "user", "content": task.description}]
 
-        # ── Tool-calling 循环 ────────────────────────────────────────────────
-        # LLM 可能连续多轮调用工具，直到返回纯文字结果为止
         MAX_ROUNDS = 10
         for round_idx in range(MAX_ROUNDS):
             result = await call_llm(
@@ -58,21 +53,18 @@ async def worker_node(state: AgentState) -> dict:
 
             tool_calls = result.get("tool_calls")
 
-            # 没有 tool_calls，说明 LLM 已给出最终答案
             if not tool_calls:
                 task.result = result.get("content", "")
                 break
 
             logger.info(f"🔧 [Worker] 第 {round_idx + 1} 轮，LLM 请求调用 {len(tool_calls)} 个工具")
 
-            # 把 LLM 的 assistant 消息（含 tool_calls）追加到历史
             messages.append({
                 "role": "assistant",
                 "content": result.get("content") or "",
                 "tool_calls": tool_calls,
             })
 
-            # 逐个执行工具，把结果追加为 tool 消息
             for tc in tool_calls:
                 tool_name = tc["function"]["name"]
                 try:
@@ -84,7 +76,6 @@ async def worker_node(state: AgentState) -> dict:
                 logger.info(f"   ▶ 调用工具: {tool_name}  参数: {arguments}")
                 try:
                     tool_result = await tool_registry.execute_tool(tool_name, arguments)
-                    # MCP 返回的是 CallToolResult，取其文本内容
                     tool_output = str(tool_result.content) if hasattr(tool_result, "content") else str(tool_result)
                     logger.info(f"   ✅ 工具 [{tool_name}] 返回: {tool_output[:120]}")
                 except Exception as e:
@@ -97,14 +88,11 @@ async def worker_node(state: AgentState) -> dict:
                     "content": tool_output,
                 })
         else:
-            # for 循环正常跑完 MAX_ROUNDS 仍未 break，说明模型反复调用工具但没给出结论
             task.status = "failed"
             task.error = f"超过最大工具调用轮数 ({MAX_ROUNDS})，任务未能完成"
             logger.error(f"❌ [Worker] 任务 {task_id} 超过最大轮数，标记为失败")
             return {"tasks": {task_id: task}}
-        # ────────────────────────────────────────────────────────────────────
 
-        # LLM 返回了空内容，视为无法完成任务
         if not task.result or not task.result.strip():
             task.status = "failed"
             task.error = "模型返回空内容，任务未能完成"

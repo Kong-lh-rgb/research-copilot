@@ -7,7 +7,6 @@ from app.infrastructure.setup import tool_registry
 
 
 async def main():
-    # 初始化 MCP 工具注册中心，建立与外部 MCP 服务的连接
     await tool_registry.initialize()
 
     try:
@@ -24,7 +23,6 @@ async def main():
             print("\n==== STEP ====")
             print(step)
     finally:
-        # 无论成功还是失败，都清理 MCP 连接
         await tool_registry.cleanup()
 
 

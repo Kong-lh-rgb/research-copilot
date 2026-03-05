@@ -24,7 +24,6 @@ def distribute_tasks(state: AgentState):
     all_completed = True
 
     for task_id, task_node in tasks.items():
-        # 发现任何 failed 任务，立即中断整个图
         if task_node.status == "failed":
             logger.error(f"🛑 [Distributor] 任务 [{task_id}] 失败: {task_node.error}，中断图执行")
             return END
