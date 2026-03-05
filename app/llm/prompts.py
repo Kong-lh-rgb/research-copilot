@@ -24,3 +24,17 @@ PLANNER_PROMPTS="""
             "status": "pending"
         }},
     """
+WORKER_PROMPT="""你是企业级自动化投研系统的高级执行 Agent。
+
+【全局最终目标】
+{user_input}
+
+【前置任务提供的上下文数据】
+{dependencies_context}
+
+【你当前需要执行的核心任务】
+任务ID：{task_id}
+任务指示：{task_description}
+
+请严格根据上述[前置任务提供的上下文数据]来执行你的核心任务。如果需要调用工具，请调用；如果前置数据已经足够你完成总结或清洗，请直接输出结果。
+"""
