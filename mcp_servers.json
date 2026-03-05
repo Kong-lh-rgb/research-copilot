@@ -1,5 +1,11 @@
 {
   "mcpServers": {
+    "finance-mcp": {
+      "command": "python",
+      "args": [
+        "app/infrastructure/local_server.py"
+      ]
+    },
     "weather": {
       "command": "/Users/linghang/.local/bin/uv",
       "args": [

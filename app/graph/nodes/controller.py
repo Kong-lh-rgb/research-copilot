@@ -23,15 +23,18 @@ def _parse_intent_from_text(answer: str) -> str:
     return result.get("intent", "")
 
 
-def controller_node(state: AgentState) -> dict:
+async def controller_node(state: AgentState) -> dict:
     user_input = state.get("user_input", "")
     logger.info(f"接收用户请求：{user_input}")
 
     try:
         system_prompt = CONTROLLER_PROMPTS
-        res = call_llm(
+        # Controller 只负责简单意图路由，不需要复杂的深度思考模型，
+        # 指定使用速度更快、成本更低的基础模型（例如 qwen-plus）
+        res = await call_llm(
             messages=[{"role": "user", "content": user_input}],
-            system=system_prompt
+            system=system_prompt,
+            model="qwen3.5-flash-2026-02-23"
         )
         if res.get("error"):
             raise ValueError(res["error"])

@@ -14,32 +14,38 @@ def router_after_controller(state:AgentState)->str:
     else:
         return "simple_chat"
     
+import logging
+
+logger = logging.getLogger(__name__)
+
 def distribute_tasks(state: AgentState):
-    """
-    任务分发器：扫描任务池，并发拉起 Worker，或收集结果交给 Reviewer
-    """
     tasks = state.get("tasks", {})
     sends = []
     all_completed = True
-    
+
     for task_id, task_node in tasks.items():
+        # 发现任何 failed 任务，立即中断整个图
+        if task_node.status == "failed":
+            logger.error(f"🛑 [Distributor] 任务 [{task_id}] 失败: {task_node.error}，中断图执行")
+            return END
+
         if task_node.status != "completed":
             all_completed = False
-            
 
-        if task_node.status == "pending" and all(
-            tasks[dep].status=="completed" for dep in task_node.dependencies
-        ):
-            sends.append(Send("worker", {"current_task_id": task_id}))
-            
-    
+        deps_done = all(
+            tasks[dep].status == "completed"
+            for dep in (task_node.dependencies or [])
+        )
+
+        if task_node.status == "pending" and deps_done:
+            task_node.status = "running"
+            sends.append(Send("worker", {"current_task_id": task_id, "tasks": tasks}))
+
     if all_completed and tasks:
         return "reviewer"
-        
 
     if sends:
         return sends
-        
 
     return END
     
@@ -50,9 +56,9 @@ def build_graph():
     graph.add_node("planner", planner_node)
     graph.add_node("worker", worker_node)
     graph.add_node("reviewer", reviewer_node)
-    graph.set_entry_node("controller")
+    graph.set_entry_point("controller")
 
-    graph.add_conditional_edge(
+    graph.add_conditional_edges(
         "controller",
         router_after_controller,
         {
@@ -64,13 +70,13 @@ def build_graph():
     graph.add_conditional_edges(
         "planner",
         distribute_tasks,
-        ["worker", "reviewer"]
+        ["worker", "reviewer", END]
     )
 
     graph.add_conditional_edges(
         "worker",
         distribute_tasks,
-        ["worker", "reviewer"]
+        ["worker", "reviewer", END]
     )
 
 
