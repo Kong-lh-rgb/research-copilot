@@ -26,7 +26,7 @@ class LLMClient:
     ) -> None:
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
-        self._model = model or os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+        self._model = model or os.getenv("OPENAI_MODEL")
 
         if not self.api_key:
             raise LLMConfigError("未设置第三方模型API")

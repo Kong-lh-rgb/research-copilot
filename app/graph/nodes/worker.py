@@ -102,13 +102,13 @@ async def worker_node(state: AgentState) -> dict:
             task.status = "failed"
             task.error = f"超过最大工具调用轮数 ({MAX_ROUNDS})，任务未能完成"
             logger.error(f"❌ [Worker] 任务 {task_id} 超过最大轮数，标记为失败")
-            return {"tasks": {task_id: task}}
+            return {"tasks": {task_id: task}, "current_task_id": task_id}
 
         if not task.result or not task.result.strip():
             task.status = "failed"
             task.error = "模型返回空内容，任务未能完成"
             logger.error(f"❌ [Worker] 任务 {task_id} 模型返回空内容，标记为失败")
-            return {"tasks": {task_id: task}}
+            return {"tasks": {task_id: task}, "current_task_id": task_id}
 
         task.status = "completed"
         logger.info(f"✅ [Worker] 任务 {task_id} 执行完成，结果: {str(task.result)[:120]}")
@@ -117,9 +117,10 @@ async def worker_node(state: AgentState) -> dict:
             "tool_history": collected_tool_calls,
             "task_results": {task_id: task.result or ""},
             "observations": {task_id: "\n---\n".join(raw_obs_parts)} if raw_obs_parts else {},
+            "current_task_id": task_id,
         }
     except Exception as e:
         task.status = "failed"
         task.error = str(e)
         logger.error(f"❌ [Worker] 执行任务 {task_id} 失败: {e}")
-        return {"tasks": {task_id: task}}
+        return {"tasks": {task_id: task}, "current_task_id": task_id}
