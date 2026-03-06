@@ -25,6 +25,7 @@ PLANNER_PROMPTS="""
             "dependencies": [],
             "status": "pending"
         }},
+    ]
     """
 WORKER_PROMPT="""你是企业级自动化投研系统的高级执行 Agent。
 
