@@ -76,7 +76,7 @@ async def _stream_chat_response(
                 # 监听 LangGraph 每一个步骤
                 async for step in compiled_graph.astream(
                     turn_state,
-                    config={"configurable": {"thread_id": thread_id}},
+                    config={"configurable": {"thread_id": thread_id, "stream_queue": queue}},
                 ):
                     for node_name, node_output in step.items():
                         if node_name == "__start__":
@@ -102,10 +102,7 @@ async def _stream_chat_response(
 
                         elif node_name == "worker":
                             current_task_id = node_output.get("current_task_id", "")
-                            if current_task_id in task_display:
-                                task_display[current_task_id]["status"] = "running"
-                                queue.put_nowait({"type": "task_running", "task_id": current_task_id})
-
+                            
                             # 工具调用去重推送
                             tool_history = node_output.get("tool_history", [])
                             for idx, tool_call in enumerate(tool_history):
@@ -116,9 +113,23 @@ async def _stream_chat_response(
                                 queue.put_nowait({"type": "tool_call", "tool_name": tool_call.get("tool_name", ""), "arguments": tool_call.get("arguments", "{}")})
                                 queue.put_nowait({"type": "tool_result", "tool_name": tool_call.get("tool_name", ""), "result": tool_call.get("output", "")[:200]})
 
-                            if current_task_id in task_display:
-                                task_display[current_task_id]["status"] = "completed"
-                                queue.put_nowait({"type": "task_complete", "task_id": current_task_id})
+                            # 根据 tasks 中的实际状态更新前端
+                            if current_task_id:
+                                tasks_update = node_output.get("tasks", {})
+                                if current_task_id in tasks_update:
+                                    task_node = tasks_update[current_task_id]
+                                    new_status = task_node.status
+                                    
+                                    # 只在状态变化时推送更新
+                                    if current_task_id not in task_display or task_display[current_task_id]["status"] != new_status:
+                                        task_display[current_task_id] = {"description": task_node.description, "status": new_status}
+                                        
+                                        if new_status == "running":
+                                            queue.put_nowait({"type": "task_running", "task_id": current_task_id})
+                                        elif new_status == "completed":
+                                            queue.put_nowait({"type": "task_complete", "task_id": current_task_id})
+                                        elif new_status == "failed":
+                                            queue.put_nowait({"type": "task_failed", "task_id": current_task_id, "error": task_node.error or "未知错误"})
 
                         elif node_name == "reviewer":
                             # 汇总时推 log
@@ -138,7 +149,7 @@ async def _stream_chat_response(
 
         async def _drain():
             while True:
-                # 使用阻塞式 get（带超时），token 入队后立即被唤醒，不再 10ms 轮询积压
+                # 使用阻塞式 get（带超时），token 入队后立即被唤醒
                 try:
                     item = await asyncio.wait_for(queue.get(), timeout=0.2)
                 except asyncio.TimeoutError:
@@ -148,10 +159,8 @@ async def _stream_chat_response(
                     continue
 
                 if item is None:
-                    # None 是 sentinel，检查是否可以退出
-                    if graph_done.is_set() and queue.empty():
-                        break
                     continue
+                # ⚠️ 返回纯 JSON，不添加 SSE 前缀（统一由外层 generate() 处理）
                 yield json.dumps(item, ensure_ascii=False)
 
         # 运行图并分发事件
@@ -184,6 +193,7 @@ async def chat_stream(request: Request, body: ChatRequest):
     
     async def generate():
         async for message in _stream_chat_response(request, compiled_graph, body.query, thread_id):
+            # 统一添加 SSE 格式前缀（所有消息都是纯 JSON 字符串）
             yield f"data: {message}\n\n"
 
     return StreamingResponse(

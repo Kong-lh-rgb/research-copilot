@@ -5,6 +5,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+import httpx
 
 from app.shared.errors import LLMServiceError
 
@@ -34,10 +35,17 @@ class LLMClient:
         if not self.api_key:
             raise LLMConfigError("未设置第三方模型API")
 
+        # 设置超时：连接10秒，读取120秒，写入10秒
         self._client = AsyncOpenAI(
             api_key=self.api_key,
             base_url=self.base_url or None,
+            timeout=httpx.Timeout(120.0, connect=10.0, write=10.0),
+            max_retries=3,  # 最多重试3次
         )
+        
+        # 降低 openai 库的日志级别，避免干扰
+        logging.getLogger("openai").setLevel(logging.WARNING)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
 
     @property
     def model(self) -> str:

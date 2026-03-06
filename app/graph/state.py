@@ -1,14 +1,15 @@
 from typing import Any, Dict, List, TypedDict, Annotated, Optional
-from dataclasses import dataclass, field
+
+from pydantic import BaseModel, Field
 from langgraph.graph.message import add_messages
 
 
-@dataclass
-class TaskNode:
+
+class TaskNode(BaseModel):
     task_id: str
     description: str
     status: str = "pending"
-    dependencies: List[str] = field(default_factory=list)
+    dependencies: List[str] = Field(default_factory=list)
     result: Optional[str] = None
     error: Optional[str] = None
 
@@ -32,6 +33,11 @@ def concat_lists(left: Optional[List], right: Optional[List]) -> List:
     return (left or []) + (right or [])
 
 
+def take_last(left: Any, right: Any) -> Any:
+    """取最后一个值的 reducer，用于并发更新时只保留最新值。"""
+    return right if right is not None else left
+
+
 class AgentState(TypedDict, total=False):
     # ── 对话记录（仅 user / assistant 消息，由 add_messages 自动追加）
     messages: Annotated[List[Any], add_messages]
@@ -40,7 +46,7 @@ class AgentState(TypedDict, total=False):
     thread_id: str
     user_input: str
     next_action: str
-    current_task_id: str
+    current_task_id: Annotated[str, take_last]  # 支持并发更新
 
     # ── 任务图（planner 生成，controller 调度，worker 更新 status/result）
     tasks: Annotated[Dict[str, TaskNode], merge_dicts]

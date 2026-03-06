@@ -32,7 +32,8 @@ async def controller_node(state: AgentState) -> dict:
         res = await call_llm(
             messages=[{"role": "user", "content": user_input}],
             system=system_prompt,
-            model="qwen3.5-flash-2026-02-23"
+            model="qwen3.5-flash-2026-02-23",
+            temperature=0.2  # 稍微提高温度以加快生成速度
         )
         if res.get("error"):
             raise ValueError(res["error"])

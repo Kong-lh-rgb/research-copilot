@@ -38,16 +38,21 @@ export function useChatStream() {
         return prev;
       }
 
-      const next = [...prev];
       const activeId = activeMessageIdRef.current;
-      let lastAi = (activeId
-        ? next.find((msg) => msg.role === "assistant" && msg.id === activeId)
-        : next.slice().reverse().find((msg) => msg.role === "assistant")) as AiMessage | undefined;
+      const lastAiIndex = activeId
+        ? prev.findIndex((msg) => msg.role === "assistant" && msg.id === activeId)
+        : prev.map((msg, idx) => (msg.role === "assistant" ? idx : -1)).filter(idx => idx >= 0).pop() ?? -1;
 
-      if (!lastAi) {
+      let lastAi: AiMessage;
+      let isNewMessage = false;
+
+      if (lastAiIndex === -1) {
         lastAi = emptyAiMessage();
-        next.push(lastAi);
+        isNewMessage = true;
         activeMessageIdRef.current = lastAi.id;
+      } else {
+        // ⚠️ 创建新对象而不是直接修改引用（保持不可变性）
+        lastAi = { ...prev[lastAiIndex] } as AiMessage;
       }
 
       if (event.type === "log") {
@@ -87,15 +92,14 @@ export function useChatStream() {
 
       if (event.type === "task_start") {
         const exists = lastAi.tasks.some((task) => task.id === event.task_id);
-        if (exists) {
-          return [...next];
+        if (!exists) {
+          const task: TaskItem = {
+            id: event.task_id,
+            label: event.description,
+            status: "pending",
+          };
+          lastAi.tasks = [...lastAi.tasks, task];
         }
-        const task: TaskItem = {
-          id: event.task_id,
-          label: event.description,
-          status: "pending",
-        };
-        lastAi.tasks = [...lastAi.tasks, task];
       }
 
       if (event.type === "task_running") {
@@ -125,16 +129,15 @@ export function useChatStream() {
         const exists = lastAi.toolCalls.some(
           (tool) => `${tool.name}|${tool.input}` === signature
         );
-        if (exists) {
-          return [...next];
+        if (!exists) {
+          const toolCall: ToolCall = {
+            id: createId(),
+            name: event.tool_name,
+            input: event.arguments || "{}",
+            status: "running",
+          };
+          lastAi.toolCalls = [...lastAi.toolCalls, toolCall];
         }
-        const toolCall: ToolCall = {
-          id: createId(),
-          name: event.tool_name,
-          input: event.arguments || "{}",
-          status: "running",
-        };
-        lastAi.toolCalls = [...lastAi.toolCalls, toolCall];
       }
 
       if (event.type === "tool_result") {
@@ -163,7 +166,14 @@ export function useChatStream() {
         activeMessageIdRef.current = null;
       }
 
-      return [...next];
+      // 返回新数组
+      if (isNewMessage) {
+        return [...prev, lastAi];
+      } else {
+        const next = [...prev];
+        next[lastAiIndex] = lastAi;
+        return next;
+      }
     });
   }, []);
 
@@ -218,17 +228,31 @@ export function useChatStream() {
           if (done) break;
           if (stopRef.current) break;
 
+          // 解码当前 chunk 并追加到 buffer
           buffer += decoder.decode(value, { stream: true });
+          
+          // 按换行符分割，最后一个元素可能是不完整的行，保留在 buffer 中
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
 
           for (const line of lines) {
             const trimmed = line.trim();
-            if (!trimmed.startsWith("data: ")) continue;
-            const payload = trimmed.slice(6);
-            if (!payload) continue;
-            const event = JSON.parse(payload) as StreamEvent;
-            applyEvent(event);
+            if (!trimmed) continue;
+            
+            // 只处理以 'data: ' 开头的行
+            if (trimmed.startsWith("data: ")) {
+              const payload = trimmed.slice(6).trim();
+              
+              if (!payload) continue;
+              if (payload === "[DONE]") continue;
+
+              try {
+                const event = JSON.parse(payload) as StreamEvent;
+                applyEvent(event);
+              } catch (e) {
+                console.error("Failed to parse SSE JSON:", payload, e);
+              }
+            }
           }
         }
       }

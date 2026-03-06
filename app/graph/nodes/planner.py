@@ -39,13 +39,14 @@ async def planner_node(state: AgentState) -> dict:
             return {"role": role, "content": getattr(m, "content", "")}
         
         history = [_to_dict(m) for m in raw_messages]
-        # 最后一条是本轮的 user message，已经包含在 history 里，保持完整
-        planner_messages = history[-20:] if history else [{"role": "user", "content": user_input}]
+        # 只取最近 10 条以提升速度（减少 token 数量）
+        planner_messages = history[-10:] if history else [{"role": "user", "content": user_input}]
 
         system = PLANNER_PROMPTS
         res = await call_llm(
             messages=planner_messages,
-            system=system
+            system=system,
+            temperature=0.2  # 稍微提高温度以加快生成速度
         )
         if res.get("error"):
             raise ValueError(res["error"])

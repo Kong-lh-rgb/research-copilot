@@ -2,6 +2,7 @@ import asyncio
 import logging
 from app.graph.state import AgentState
 from app.llm.wrapper import call_llm_stream
+from langchain_core.runnables import RunnableConfig
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +26,8 @@ def _get_queue(thread_id: str) -> asyncio.Queue | None:
         return None
 
 
-async def reviewer_node(state: AgentState) -> dict:
-    """从 state 全局字典获取 thread_id（LangGraph官方推荐的稳妥做法）。"""
-    thread_id = state.get("thread_id", "")
-    queue = _get_queue(thread_id)
+async def reviewer_node(state: AgentState, config: RunnableConfig) -> dict:
+    queue = config.get("configurable", {}).get("stream_queue")
 
     task_results = state.get("task_results") or {}
     if task_results:
@@ -43,32 +42,28 @@ async def reviewer_node(state: AgentState) -> dict:
 
     if len(results) == 1:
         content = results[0]
-        if queue is not None:
-            # 分块推送，避免把整段内容当单个 token 一次性塞入队列
+        if queue:
+            # 分块推送（避免单次推送过大内容）
             chunk_size = 80
             for i in range(0, len(content), chunk_size):
                 queue.put_nowait({"type": "content_token", "delta": content[i:i + chunk_size]})
                 await asyncio.sleep(0)  # 让事件循环有机会调度 _drain
-            queue.put_nowait(None)
     else:
         combined = "\n\n---\n\n".join(results)
         messages = [
             {"role": "user", "content": f"以下是各子任务的执行结果，请整合成一份报告：\n\n{combined}"}
         ]
         full_content = ""
-        async for chunk in call_llm_stream(messages=messages, system=REVIEWER_PROMPT_TEXT):
+        async for chunk in call_llm_stream(messages=messages, system=REVIEWER_PROMPT_TEXT, temperature=0.3):
             if chunk.get("done"):
                 break
             c = chunk.get("content", "")
             if c:
                 full_content += c
-                if queue is not None:
+                if queue:
                     queue.put_nowait({"type": "content_token", "delta": c})
-        if queue is not None:
-            queue.put_nowait(None)
         content = full_content or combined
 
-    logger.info(f"✅ [Reviewer] 汇总完成")
     return {
         "final_report": content,
         "messages": [{"role": "assistant", "content": content}],

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from langchain_core.runnables import RunnableConfig
 from app.llm.wrapper import call_llm_stream
 from app.graph.state import AgentState
 from app.llm.prompts import SIMPLE_CHAT_PROMPT
@@ -40,33 +41,26 @@ def _get_queue(thread_id: str) -> asyncio.Queue | None:
         return None
 
 
-async def simple_chat_node(state: AgentState) -> dict:
-    """从 state 全局字典获取 thread_id（LangGraph官方推荐的稳妥做法）。"""
-    thread_id = state.get("thread_id", "")
-    queue = _get_queue(thread_id)
+async def simple_chat_node(state: AgentState, config: RunnableConfig) -> dict:
+    # 核心修改：从 config 安全获取 queue
+    queue = config.get("configurable", {}).get("stream_queue")
 
     messages = [_to_openai_dict(m) for m in state.get("messages", [])]
     system = SIMPLE_CHAT_PROMPT + _build_tool_context(state)
-
     full_content = ""
 
-    async for chunk in call_llm_stream(messages=messages, system=system):
+    async for chunk in call_llm_stream(messages=messages, system=system, temperature=0.3):
         if chunk.get("done"):
             break
-        t = chunk.get("thinking", "")
+        # ⚠️ 只推送 content_token，不推送模型的 thinking（reasoning_content）
+        # 避免在前端"思考过程"面板中显示混乱的模型内部思考
         c = chunk.get("content", "")
-        if t and queue is not None:
-            queue.put_nowait({"type": "thinking_token", "delta": t})
         if c:
             full_content += c
-            if queue is not None:
+            if queue:
                 queue.put_nowait({"type": "content_token", "delta": c})
 
-    if queue is not None:
-        queue.put_nowait(None)
-
     content = full_content or ""
-    logger.info(f"[SimpleChat] 回复长度: {len(content)}")
     return {
         "final_report": content,
         "messages": [{"role": "assistant", "content": content}],
