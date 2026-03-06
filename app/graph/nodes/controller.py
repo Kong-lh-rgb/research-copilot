@@ -47,7 +47,7 @@ async def controller_node(state: AgentState) -> dict:
         logger.error(f"❌ [Controller] 解析大模型路由指令失败: {e}")
         logger.warning("🛡️ 触发兜底机制：默认将其视为复杂任务进入调研流。")
         return {
-            "next_action": "planner"
+            "next_action": "complex_research"
         }
 
 

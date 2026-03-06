@@ -1,31 +1,20 @@
 {
   "mcpServers": {
     "finance-mcp": {
-      "command": "python",
-      "args": [
-        "app/infrastructure/local_server.py"
-      ]
+      "type": "python",
+      "script_or_package": "app/infrastructure/local_server.py"
     },
     "weather": {
-      "command": "/Users/linghang/.local/bin/uv",
-      "args": [
-        "--directory",
-        "/Users/linghang/agent/MCP/weather",
-        "run",
-        "weather.py"
-      ]
+      "type": "python",
+      "script_or_package": "weather.py",
+      "cwd": "${WEATHER_MCP_DIR}"
     },
     "amap-maps": {
-      "command": "/usr/local/bin/npx",
-      "args": [
-        "-y",
-        "@amap/amap-maps-mcp-server"
-      ],
+      "type": "node",
+      "package": "@amap/amap-maps-mcp-server",
       "env": {
-        "AMAP_MAPS_API_KEY": "a5eaa437e504547a237fb50823fb6eb2",
-        "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        "AMAP_MAPS_API_KEY": "${AMAP_MAPS_API_KEY}"
       }
     }
   }
 }
-

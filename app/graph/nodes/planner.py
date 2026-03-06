@@ -23,15 +23,28 @@ def _parse_tasks(content: str) -> Dict[str, TaskNode]:
         for t in task_list
     }
 
-async def planner_node(state:AgentState)->dict:
+async def planner_node(state: AgentState) -> dict:
     try:
         user_input = state.get("user_input", "")
         if not user_input:
             raise ValueError("用户输入为空，无法生成任务列表")
 
+        # 拼入最近历史对话让规划时感知上下文
+        raw_messages = list(state.get("messages") or [])
+        
+        def _to_dict(m):
+            if isinstance(m, dict):
+                return m
+            role = {"human": "user", "ai": "assistant"}.get(getattr(m, "type", ""), "user")
+            return {"role": role, "content": getattr(m, "content", "")}
+        
+        history = [_to_dict(m) for m in raw_messages]
+        # 最后一条是本轮的 user message，已经包含在 history 里，保持完整
+        planner_messages = history[-20:] if history else [{"role": "user", "content": user_input}]
+
         system = PLANNER_PROMPTS
         res = await call_llm(
-            messages=[{"role":"user", "content": user_input}],
+            messages=planner_messages,
             system=system
         )
         if res.get("error"):

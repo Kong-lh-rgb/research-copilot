@@ -1,23 +1,18 @@
-from langgraph.graph import END,START,StateGraph
+import logging
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
 from app.graph.nodes.controller import controller_node
 from app.graph.nodes.simple_chat import simple_chat_node
 from app.graph.nodes.planner import planner_node
 from app.graph.nodes.reviewer import reviewer_node
 from app.graph.nodes.worker import worker_node
 from app.graph.state import AgentState
-from langgraph.types import Send
-
-
-def router_after_controller(state:AgentState)->str:
-    next_action = state.get("next_action","")
-    if next_action == "complex_research":
-        return "planner"
-    else:
-        return "simple_chat"
-    
-import logging
 
 logger = logging.getLogger(__name__)
+
+
+def router_after_controller(state: AgentState) -> str:
+    return "planner" if state.get("next_action") == "complex_research" else "simple_chat"
 
 def distribute_tasks(state: AgentState):
     tasks = state.get("tasks", {})

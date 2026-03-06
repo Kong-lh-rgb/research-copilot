@@ -14,14 +14,26 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from app.api.chat import router as chat_router
 from app.infrastructure.setup import tool_registry
+from app.graph.build_graph import build_graph
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 1. 启动所有 MCP 服务（长驻进程）
     await tool_registry.initialize()
-    yield
 
+    # 2. 预编译 LangGraph（避免每次请求都重新 build + compile）
+    async with AsyncSqliteSaver.from_conn_string("memory.db") as checkpointer:
+        app.state.compiled_graph = build_graph().compile(checkpointer=checkpointer)
+        app.state.checkpointer = checkpointer
+        # 3. 初始化流式 token 传递队列（key: thread_id）
+        app.state.stream_queues: dict = {}
+        yield
+
+    # 4. 清理所有 MCP 服务
     await tool_registry.cleanup()
+
 
 # 创建 FastAPI 应用
 app = FastAPI(

@@ -226,19 +226,35 @@ def get_stock_history(symbol: str, days: int = 30) -> str:
 
         # 生成折线图
         try:
+            import matplotlib
             import matplotlib.pyplot as plt
             import base64
             from io import BytesIO
+
+            # ── 设置中文字体，按优先级尝试 ──────────────────────────────────
+            matplotlib.rcParams['font.sans-serif'] = [
+                'PingFang SC',      # macOS
+                'Heiti SC',         # macOS 备选
+                'Arial Unicode MS', # macOS 通用
+                'WenQuanYi Micro Hei',  # Linux
+                'Noto Sans CJK SC', # Linux 备选
+                'DejaVu Sans',      # 最终回退（不支持中文，但不会崩溃）
+            ]
+            matplotlib.rcParams['axes.unicode_minus'] = False  # 修复负号显示
+
             dates = [r["日期"] for r in rows]
             closes = [float(r["收盘"]) for r in rows]
-            plt.figure(figsize=(6, 3))
-            plt.plot(dates, closes, marker='o', color='#0072c6')
-            plt.xticks(rotation=45)
-            plt.title(f"{symbol} 股价走势")
-            plt.tight_layout()
+            fig, ax = plt.subplots(figsize=(8, 3))
+            ax.plot(dates, closes, marker='o', markersize=3, color='#0072c6', linewidth=1.5)
+            ax.set_xticks(range(0, len(dates), max(1, len(dates) // 8)))
+            ax.set_xticklabels(dates[::max(1, len(dates) // 8)], rotation=45, ha='right', fontsize=8)
+            ax.set_title(f"{symbol} 股价走势（近 {days} 个交易日）", fontsize=11)
+            ax.set_ylabel("收盘价 (元)", fontsize=9)
+            ax.grid(True, linestyle='--', alpha=0.5)
+            fig.tight_layout()
             buf = BytesIO()
-            plt.savefig(buf, format='png')
-            plt.close()
+            fig.savefig(buf, format='png', dpi=120)
+            plt.close(fig)
             buf.seek(0)
             img_base64 = base64.b64encode(buf.read()).decode('utf-8')
             chart_url = f"data:image/png;base64,{img_base64}"

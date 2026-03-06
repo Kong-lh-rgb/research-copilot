@@ -55,15 +55,34 @@ export function useChatStream() {
         if (lastStep !== event.message) {
           lastAi.thinking = [...lastAi.thinking, event.message];
         }
-        lastAi.status = "thinking";
+        if (lastAi.status !== "streaming") {
+          lastAi.status = "thinking";
+        }
       }
 
       if (event.type === "start") {
-        lastAi.status = "streaming";
         if (event.thread_id) {
           threadIdRef.current = event.thread_id;
           setThreadId(event.thread_id);
         }
+      }
+
+      // 模型思考 token（打字机追加到 thinking）
+      if (event.type === "thinking_token") {
+        const last = lastAi.thinking[lastAi.thinking.length - 1];
+        if (typeof last === "string" && !last.startsWith("🤔") && !last.startsWith("✓") && !last.startsWith("📋") && !last.startsWith("📊") && !last.startsWith("💬")) {
+          // 追加到最后一个思考条目
+          lastAi.thinking = [...lastAi.thinking.slice(0, -1), last + event.delta];
+        } else {
+          lastAi.thinking = [...lastAi.thinking, event.delta];
+        }
+        lastAi.status = "streaming";
+      }
+
+      // 最终回答 token（打字机追加到 content）
+      if (event.type === "content_token") {
+        lastAi.content = (lastAi.content || "") + event.delta;
+        lastAi.status = "streaming";
       }
 
       if (event.type === "task_start") {
@@ -130,7 +149,11 @@ export function useChatStream() {
       }
 
       if (event.type === "final") {
-        lastAi.content = event.reply;
+        // 如果已经通过 content_token 流式生成了内容，绝不覆盖（避免重复）
+        // 只有在内容为空时（比如极速回复或流式失败）才应用 final 的 reply
+        if (!lastAi.content || lastAi.content.length === 0) {
+          lastAi.content = event.reply;
+        }
         lastAi.status = "done";
         activeMessageIdRef.current = null;
       }

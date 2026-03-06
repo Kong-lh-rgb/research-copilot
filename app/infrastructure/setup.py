@@ -1,46 +1,136 @@
 import logging
 import json
 import os
+import shutil
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from mcp.types import Tool
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from app.infrastructure.client import MCPToolClient
 
 logger = logging.getLogger(__name__)
 
+# 项目根目录（用于将相对路径 script 转换为绝对路径）
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+
+def _expand_env(value: Any) -> Any:
+    """递归展开字符串中的 ${ENV_VAR} 占位符，dict/list 递归处理。"""
+    if isinstance(value, str):
+        return os.path.expandvars(value)
+    if isinstance(value, dict):
+        return {k: _expand_env(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_env(item) for item in value]
+    return value
+
+
+def _resolve_binary(name: str) -> str:
+    """
+    动态寻找可执行文件路径：
+    1. 优先读取 {NAME_UPPER}_BIN 环境变量（e.g. UV_BIN, NPX_BIN）
+    2. 降级到 shutil.which(name)
+    3. 再降级直接返回 name（交由系统 PATH 处理）
+    """
+    env_key = f"{name.upper()}_BIN"
+    from_env = os.getenv(env_key, "").strip()
+    if from_env:
+        return from_env
+    found = shutil.which(name)
+    if found:
+        return found
+    logger.warning(f"⚠️ 未在 PATH 中找到 [{name}]，将直接使用名称，请确保其在 PATH 中可用。")
+    return name
+
+
 class MCPRegistry:
     def __init__(self):
-        self.clients:Dict[str, MCPToolClient] = {}
+        self.clients: Dict[str, MCPToolClient] = {}
         self.tool_routing_table: Dict[str, str] = {}
 
     def _build_client_from_config(self, server_name: str, server_config: Dict[str, Any]) -> MCPToolClient:
-        env = server_config.get("env")
+        # 先展开所有 ${} 占位符
+        cfg = _expand_env(server_config)
 
-        if "command" in server_config:
-            command = server_config.get("command")
-            args = server_config.get("args", [])
+        # 合并系统环境变量，防止丢失 PATH 等关键变量导致子进程命令找不到
+        env_from_cfg: Optional[Dict[str, str]] = cfg.get("env")
+        if env_from_cfg:
+            env = os.environ.copy()
+            env.update(env_from_cfg)
+        else:
+            env = None
+        
+        cwd: Optional[str] = cfg.get("cwd")
+
+        # ── 直接指定 command 模式 ──
+        if "command" in cfg:
+            command = cfg.get("command")
+            args = cfg.get("args", [])
             if not command:
                 raise ValueError(f"服务 [{server_name}] 缺少有效 command")
             if not isinstance(args, list):
                 raise ValueError(f"服务 [{server_name}] 的 args 必须是数组")
-            return MCPToolClient(command=command, args=args, env=env)
+            return MCPToolClient(command=command, args=args, env=env, cwd=cwd)
 
-        server_type = server_config.get("type")
-        args = server_config.get("args", [])
+        server_type = cfg.get("type")
+        args = cfg.get("args", [])
         if not isinstance(args, list):
             raise ValueError(f"服务 [{server_name}] 的 args 必须是数组")
 
+        # ── Node.js (npx) 模式 ──
         if server_type == "node":
-            package = server_config.get("package")
+            package = cfg.get("package")
             if not package:
                 raise ValueError(f"Node 服务 [{server_name}] 缺少 package")
-            return MCPToolClient.from_npx(package=package, args=args, env=env)
+            npx_bin = _resolve_binary("npx")
+            return MCPToolClient.from_npx(package=package, args=args, env=env, npx_bin=npx_bin)
 
+        # ── Python (uv) 模式 ──
         if server_type == "python":
-            script_or_package = server_config.get("script_or_package") or server_config.get("script") or server_config.get("package")
+            script_or_package = (
+                cfg.get("script_or_package")
+                or cfg.get("script")
+                or cfg.get("package")
+            )
             if not script_or_package:
                 raise ValueError(f"Python 服务 [{server_name}] 缺少 script_or_package/script/package")
-            return MCPToolClient.from_python(script_or_package=script_or_package, args=args, env=env)
+
+            uv_bin = _resolve_binary("uv")
+
+            if cwd:
+                if cwd.startswith("$") or not cwd:
+                    raise ValueError(
+                        f"Python 服务 [{server_name}] 的 cwd 环境变量未展开（当前值: '{cwd}'）。"
+                        f"请在 .env 中设置对应的环境变量。"
+                    )
+                # 如果 script 看似是本地文件（例如以 .py 结尾），基于 cwd 解析为绝对路径
+                if script_or_package.endswith(".py"):
+                    script_path = Path(cwd) / script_or_package
+                    script_or_package = str(script_path.resolve())
+
+                return MCPToolClient.from_python(
+                    script_or_package=script_or_package,
+                    args=args,
+                    env=env,
+                    cwd=cwd,
+                    uv_bin=uv_bin,
+                )
+            else:
+                # 无 cwd：若是本地文件，基于项目根目录解析为绝对路径
+                script_path = Path(script_or_package)
+                if script_or_package.endswith(".py") and not script_path.is_absolute():
+                    script_path = _PROJECT_ROOT / script_path
+                    script_or_package = str(script_path.resolve())
+
+                return MCPToolClient.from_python(
+                    script_or_package=script_or_package,
+                    args=args,
+                    env=env,
+                    uv_bin=uv_bin,
+                )
 
         raise ValueError(
             f"服务 [{server_name}] 配置格式不支持：请使用 command/args 或 type=node|python"
@@ -49,23 +139,20 @@ class MCPRegistry:
     async def initialize(self) -> None:
         """读取配置文件，批量启动并注册所有 MCP 服务"""
         logger.info("🚀 开始读取配置文件并初始化 MCP 注册中心...")
-        
- 
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
-        config_path = os.path.join(base_dir, 'mcp_servers.json')
-        
-        if not os.path.exists(config_path):
+
+        base_dir = _PROJECT_ROOT
+        config_path = base_dir / "mcp_servers.json"
+
+        if not config_path.exists():
             logger.warning(f"⚠️ 未找到配置文件: {config_path}，将跳过外部工具加载。")
             return
 
-
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
         except json.JSONDecodeError as e:
             logger.error(f"配置文件 JSON 格式错误: {e}")
             return
-
 
         for server_name, server_config in config.get("mcpServers", {}).items():
             try:
@@ -78,10 +165,10 @@ class MCPRegistry:
             try:
                 await client.start()
                 tools = await client.get_tools()
-                
+
                 for tool in tools:
                     self.tool_routing_table[tool.name] = service_name
-                    
+
                 logger.info(f"✅ 服务 [{service_name}] 启动成功，已挂载 {len(tools)} 个工具。")
             except Exception as e:
                 logger.error(f"❌ 服务 [{service_name}] 启动失败，请检查配置或环境: {e}")
@@ -99,10 +186,10 @@ class MCPRegistry:
         """统一的工具执行网关。"""
         if tool_name not in self.tool_routing_table:
             raise ValueError(f"未知工具: '{tool_name}'，注册中心未找到对应的提供方！")
-            
+
         service_name = self.tool_routing_table[tool_name]
         client = self.clients[service_name]
-        
+
         logger.info(f"🚦 网关路由: 拦截到 [{tool_name}] 请求，分发至节点 -> [{service_name}]")
         return await client.call_tool(tool_name, arguments)
 
@@ -115,5 +202,6 @@ class MCPRegistry:
         self.clients.clear()
         self.tool_routing_table.clear()
         logger.info("✅ 资源清理完毕。")
+
 
 tool_registry = MCPRegistry()

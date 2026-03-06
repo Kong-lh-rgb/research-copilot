@@ -56,3 +56,12 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+
+# ========================
+# Project-specific
+# ========================
+# 包含 API Keys 和本机路径，不提交到版本库
+mcp_servers.json
+# 运行时生成文件
+memory.db
+output.txt

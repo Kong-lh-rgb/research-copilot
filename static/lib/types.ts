@@ -46,6 +46,8 @@ export type StreamEvent =
   | { type: "tool_call"; tool_name: string; arguments?: string }
   | { type: "tool_result"; tool_name: string; result: string }
   | { type: "task_complete"; task_id: string }
+  | { type: "thinking_token"; delta: string }
+  | { type: "content_token"; delta: string }
   | { type: "final"; reply: string }
   | { type: "error"; message: string }
   | { type: "end" };
