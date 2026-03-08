@@ -10,18 +10,28 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from app.api.chat import router as chat_router
+from app.api.auth import router as auth_router
+from app.api.threads import router as threads_router
 from app.infrastructure.setup import tool_registry
 from app.graph.build_graph import build_graph
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from contextlib import asynccontextmanager
+import os
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
     await tool_registry.initialize()
 
+    pg_url = os.environ["DATABASE_URL"]  # e.g. postgresql://user:pass@host:5432/dbname
 
-    async with AsyncSqliteSaver.from_conn_string("memory.db") as checkpointer:
+    # Initialise business-logic DB (users / threads / messages)
+    from app.db.session import init_db, create_tables
+    init_db(pg_url)
+    await create_tables()
+
+    async with AsyncPostgresSaver.from_conn_string(pg_url) as checkpointer:
+        await checkpointer.setup()  # 自动创建 checkpoints 表（幂等）
         app.state.compiled_graph = build_graph().compile(checkpointer=checkpointer)
         app.state.checkpointer = checkpointer
 
@@ -49,6 +59,8 @@ app.add_middleware(
 )
 
 
+app.include_router(auth_router)
+app.include_router(threads_router)
 app.include_router(chat_router)
 
 static_dir = Path(__file__).parent / "static"

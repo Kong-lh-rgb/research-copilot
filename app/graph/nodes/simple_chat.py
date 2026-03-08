@@ -45,7 +45,6 @@ async def simple_chat_node(state: AgentState, config: RunnableConfig) -> dict:
         # ⚠️ 只推送 content_token，不推送模型的 thinking（reasoning_content）
         # 避免在前端"思考过程"面板中显示混乱的模型内部思考
         c = chunk.get("content", "")
-        print(f"simple_chat_node: received chunk: {c}")
         if c:
             full_content += c
             if queue:

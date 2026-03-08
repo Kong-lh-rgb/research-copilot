@@ -3,6 +3,7 @@
 import { flushSync } from "react-dom";
 import { useCallback, useRef, useState } from "react";
 import { mockStream } from "@/lib/mockStream";
+import { getToken } from "@/lib/api";
 import type { AiMessage, ChatMessage, StreamEvent, TaskItem, ToolCall } from "@/lib/types";
 
 const createId = () => Math.random().toString(36).slice(2);
@@ -209,9 +210,12 @@ export function useChatStream() {
         if (threadIdRef.current) {
           payload.thread_id = threadIdRef.current;
         }
+        const token = getToken();
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (token) headers["Authorization"] = `Bearer ${token}`;
         const response = await fetch(streamUrl, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify(payload),
           signal: controllerRef.current.signal,
         });

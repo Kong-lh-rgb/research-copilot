@@ -51,3 +51,34 @@ export type StreamEvent =
   | { type: "final"; reply: string }
   | { type: "error"; message: string }
   | { type: "end" };
+
+// ─── Auth & User ─────────────────────────────────────────────────────────────
+
+export type AuthUser = {
+  user_id: string;
+  username: string;
+};
+
+export type TokenResponse = {
+  access_token: string;
+  token_type: string;
+  user_id: string;
+  username: string;
+};
+
+// ─── Backend Thread / Message ─────────────────────────────────────────────────
+
+export type BackendThread = {
+  id: string;
+  title: string;
+  updated_at: string;
+  created_at: string;
+};
+
+export type BackendMessage = {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  meta: Record<string, unknown> | null;
+  created_at: string;
+};

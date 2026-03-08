@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import uuid as _uuid
 from typing import AsyncGenerator, Optional
 from uuid import uuid4
 from fastapi import APIRouter, Request
@@ -9,6 +10,43 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+async def _save_turn_to_db(
+    token: str,
+    thread_id: str,
+    user_query: str,
+    assistant_reply: str,
+) -> None:
+    """Persist a user/assistant message pair to PostgreSQL after stream ends."""
+    try:
+        from jose import jwt, JWTError
+        from app.api.auth import SECRET_KEY, ALGORITHM
+        from app.db.session import get_session_factory
+        from app.db import repository
+
+        factory = get_session_factory()
+        if factory is None:
+            return
+
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id_str: str | None = payload.get("sub")
+        if not user_id_str:
+            return
+
+        user_id = _uuid.UUID(user_id_str)
+        title = user_query[:30] if user_query else "新对话"
+
+        async with factory() as session:
+            await repository.get_or_create_thread(session, thread_id, user_id, title)
+            await repository.add_message(session, thread_id, "user", user_query)
+            if assistant_reply:
+                await repository.add_message(session, thread_id, "assistant", assistant_reply)
+            await repository.touch_thread(session, thread_id)
+            await session.commit()
+
+    except Exception as e:
+        logger.warning(f"Failed to persist turn to DB: {e}")
 
 
 class ChatRequest(BaseModel):
@@ -43,7 +81,11 @@ def _format_message(msg_type: str, **kwargs) -> str:
 
 
 async def _stream_chat_response(
-    request: Request, compiled_graph, query: str, thread_id: str
+    request: Request,
+    compiled_graph,
+    query: str,
+    thread_id: str,
+    reply_holder: Optional[list] = None,
 ) -> AsyncGenerator[str, None]:
     queue: asyncio.Queue = asyncio.Queue()
     request.app.state.stream_queues[thread_id] = queue
@@ -176,6 +218,8 @@ async def _stream_chat_response(
 
         # 只有在最终没有 content_token 推送内容时，才做 final 兜底（由前端保证不重复渲染）
         if final_reply:
+            if reply_holder is not None:
+                reply_holder.append(final_reply)
             yield _format_message("log", message="✅ 执行完毕", level="success")
             yield _format_message("final", reply=final_reply)
 
@@ -193,11 +237,26 @@ async def chat_stream(request: Request, body: ChatRequest):
     from fastapi.responses import StreamingResponse
     compiled_graph = request.app.state.compiled_graph
     thread_id = body.thread_id or f"web_{uuid4().hex}"
-    
+
+    # Extract optional Bearer token for per-user message persistence
+    auth_header = request.headers.get("Authorization", "")
+    token: Optional[str] = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.startswith("Bearer ")
+        else None
+    )
+
     async def generate():
-        async for message in _stream_chat_response(request, compiled_graph, body.query, thread_id):
-            # 统一添加 SSE 格式前缀（所有消息都是纯 JSON 字符串）
+        reply_holder: list[str] = []
+        async for message in _stream_chat_response(
+            request, compiled_graph, body.query, thread_id, reply_holder
+        ):
             yield f"data: {message}\n\n"
+
+        # Persist user query + assistant reply to PostgreSQL when authenticated
+        if token:
+            final_reply = reply_holder[0] if reply_holder else ""
+            await _save_turn_to_db(token, thread_id, body.query, final_reply)
 
     return StreamingResponse(
         generate(),
