@@ -1,7 +1,4 @@
 import logging
-import sys
-
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -20,22 +17,21 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 1. 启动所有 MCP 服务（长驻进程）
+
     await tool_registry.initialize()
 
-    # 2. 预编译 LangGraph（避免每次请求都重新 build + compile）
+
     async with AsyncSqliteSaver.from_conn_string("memory.db") as checkpointer:
         app.state.compiled_graph = build_graph().compile(checkpointer=checkpointer)
         app.state.checkpointer = checkpointer
-        # 3. 初始化流式 token 传递队列（key: thread_id）
-        app.state.stream_queues: dict = {}
+
+        app.state.stream_queues = {}
         yield
 
-    # 4. 清理所有 MCP 服务
+
     await tool_registry.cleanup()
 
 
-# 创建 FastAPI 应用
 app = FastAPI(
     title="深度研究 Agent API",
     description="企业级AI投研Agent的API接口，支持流式聊天和执行过程展示",
@@ -43,7 +39,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# 配置 CORS
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -52,16 +48,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 注册 API 路由
+
 app.include_router(chat_router)
 
-
-# 挂载静态文件（chat.html）
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# 根路由
 @app.get("/")
 async def root():
     from fastapi.responses import FileResponse

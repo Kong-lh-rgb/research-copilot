@@ -162,6 +162,9 @@ async def _stream_chat_response(
                     continue
                 # ⚠️ 返回纯 JSON，不添加 SSE 前缀（统一由外层 generate() 处理）
                 yield json.dumps(item, ensure_ascii=False)
+                # 让事件循环有机会把 HTTP 写缓冲区刷新到网络，
+                # 避免多个 token 被 TCP 打包成一次发送
+                await asyncio.sleep(0)
 
         # 运行图并分发事件
         graph_task = asyncio.create_task(_run_graph())

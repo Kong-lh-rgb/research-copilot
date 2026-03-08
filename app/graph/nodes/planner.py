@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Dict
 from app.llm.wrapper import call_llm
 from app.graph.state import AgentState, TaskNode
 from app.llm.prompts import PLANNER_PROMPTS
@@ -55,7 +55,17 @@ async def planner_node(state: AgentState) -> dict:
         logger.info(f"LLM 返回任务列表原文：{content}")
         tasks = _parse_tasks(content)
         logger.info(f"解析完成，共 {len(tasks)} 个任务: {list(tasks.keys())}")
-        return {"tasks": tasks}
+        ready_tasks = [
+            task_id
+            for task_id, task in tasks.items()
+            if not task.dependencies
+        ]
+        logger.info(f"初始就绪任务（无依赖）: {ready_tasks}")
+        return {
+            "tasks": tasks,
+            "ready_tasks": ready_tasks,
+            "running_tasks": [],
+        }
     
     except Exception as e:
         logger.error(f"❌ [Planner] 解析大模型生成任务列表失败: {e}")

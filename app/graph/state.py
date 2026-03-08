@@ -38,6 +38,23 @@ def take_last(left: Any, right: Any) -> Any:
     return right if right is not None else left
 
 
+def set_union(left: Optional[List[str]], right: Optional[List[str]]) -> List[str]:
+    """集合并集 reducer：合并两个列表，去重，顺序稳定。
+    用于并行 worker 同时向 ready_tasks 写入新解锁的任务 ID，防止重复。"""
+    base = list(left or [])
+    seen = set(base)
+    for item in (right or []):
+        if item not in seen:
+            base.append(item)
+            seen.add(item)
+    return base
+
+
+def add_int(left: Optional[int], right: Optional[int]) -> int:
+    """整数累加 reducer，用于并行 worker 各自累计完成/失败计数。"""
+    return (left or 0) + (right or 0)
+
+
 class AgentState(TypedDict, total=False):
     # ── 对话记录（仅 user / assistant 消息，由 add_messages 自动追加）
     messages: Annotated[List[Any], add_messages]
@@ -59,3 +76,10 @@ class AgentState(TypedDict, total=False):
 
     # ── 最终报告（reviewer / simple_chat 写入）
     final_report: str
+
+    # ── 任务调度队列（planner 初始化，worker 完成后更新）
+    # set_union 保证并行 worker 同时写入时不产生重复 ID
+    ready_tasks: Annotated[List[str], set_union]
+
+    # running_tasks 仅供调试/UI 展示，不参与核心调度逻辑
+    running_tasks: Annotated[List[str], set_union]

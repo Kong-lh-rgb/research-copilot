@@ -15,47 +15,54 @@ def router_after_controller(state: AgentState) -> str:
     return "planner" if state.get("next_action") == "complex_research" else "simple_chat"
 
 def distribute_tasks(state: AgentState):
-    tasks = state.get("tasks", {})
-    sends = []
-    all_completed = True
-    has_running = False
+    """基于 ready_tasks 队列派发 worker，O(k)（k = 当前就绪任务数）。
 
-    for task_id, task_node in tasks.items():
-        if task_node.status == "failed":
-            logger.error(f"🛑 [Distributor] 任务 [{task_id}] 失败: {task_node.error}，中断图执行")
-            return END
+    终止条件从 tasks dict 直接推导，避免依赖可能被 checkpointer
+    跨轮次污染的计数器字段。tasks dict 的 n 通常很小（5~20），O(n) 可接受。
+    """
+    tasks       = state.get("tasks") or {}
+    ready_tasks = state.get("ready_tasks") or []
 
-        if task_node.status != "completed":
-            all_completed = False
-        
-        if task_node.status == "running":
-            has_running = True
+    if not tasks:
+        logger.warning("⚠️ [Distributor] tasks 为空，终止执行")
+        return END
 
-        deps_done = all(
-            tasks[dep].status == "completed"
-            for dep in (task_node.dependencies or [])
-        )
+    # 从 tasks dict 实时推导状态计数（防止 add_int 跨对话污染）
+    completed = sum(1 for t in tasks.values() if t.status == "completed")
+    failed    = sum(1 for t in tasks.values() if t.status == "failed")
+    running   = sum(1 for t in tasks.values() if t.status == "running")
+    total     = len(tasks)
 
-        if task_node.status == "pending" and deps_done:
-            logger.info(f"🚀 [Distributor] 启动任务 [{task_id}]: {task_node.description[:50]}")
-            # ⚠️ 必须显式传递 tasks，否则 worker 读取不到任务字典
-            sends.append(Send("worker", {"current_task_id": task_id, "tasks": tasks}))
+    # ① 有任务失败 → 立即终止
+    if failed > 0:
+        logger.error(f"🛑 [Distributor] 检测到 {failed} 个失败任务，中断执行")
+        return END
 
-    if all_completed and tasks:
-        logger.info("✅ [Distributor] 所有任务已完成，进入 reviewer")
+    # ② 全部完成 → 进入 reviewer
+    if completed >= total:
+        logger.info(f"✅ [Distributor] 所有 {total} 个任务已完成，进入 reviewer")
         return "reviewer"
 
-    if sends:
-        return sends
+    # ③ 从 ready_tasks 中筛出仍处于 pending 状态的任务（过滤已 dispatched/running/completed 的）
+    pending_ready = [
+        tid for tid in ready_tasks
+        if tasks.get(tid) and tasks[tid].status == "pending"
+    ]
 
-    # 🔧 修复：如果还有任务在运行中，返回空 sends 让图继续等待（不要返回 END）
-    if has_running:
-        logger.info(f"⏳ [Distributor] 还有任务正在执行中，等待完成...")
-        return []
+    if not pending_ready:
+        if running > 0:
+            logger.info(f"⏳ [Distributor] 无新就绪任务，等待 {running} 个运行中任务完成...")
+            return []
+        logger.warning("⚠️ [Distributor] 无就绪任务且无运行中任务，终止执行")
+        return END
 
-    logger.warning("⚠️ [Distributor] 没有可执行的任务，结束执行")
-    return END
-    
+    logger.info(f"🚀 [Distributor] 将并行启动 {len(pending_ready)} 个就绪任务: {pending_ready}")
+    return [
+        Send("worker", {"current_task_id": tid, "tasks": tasks})
+        for tid in pending_ready
+    ]
+
+
 def build_graph():
     graph = StateGraph(AgentState)
     graph.add_node("controller", controller_node)

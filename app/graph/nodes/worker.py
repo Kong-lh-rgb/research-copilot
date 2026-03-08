@@ -9,24 +9,34 @@ from app.llm.prompts import WORKER_PROMPT
 
 logger = logging.getLogger(__name__)
 
-# 单个 Worker 任务内允许的最大 LLM ↔ Tool 交互轮数
-MAX_TOOL_ROUNDS = 10
-# 单个工具调用的超时时间（秒）
+MAX_TOOL_ROUNDS = 5
 TOOL_CALL_TIMEOUT = 30
-# 单次 LLM 调用的超时时间（秒）
 LLM_CALL_TIMEOUT = 180
-# 传给 LLM 的工具输出最大长度（字符）
 MAX_TOOL_OUTPUT_TO_LLM = 3000
 
 
+def _compute_newly_ready(tasks: dict, completed_task_id: str) -> list:
+    """返回因 completed_task_id 完成而被解锁的新就绪任务 ID 列表。
+
+    只扫描依赖列表中包含 completed_task_id 的 pending 任务，
+    复杂度 O(k·d)，k = pending 任务数，d = 平均依赖数，远优于全量扫描 O(n)。
+    """
+    newly_ready = []
+    for tid, task in tasks.items():
+        if task.status != "pending":
+            continue
+        if completed_task_id not in (task.dependencies or []):
+            continue
+        # 所有依赖均已完成才解锁
+        if all(tasks.get(dep) and tasks[dep].status == "completed" for dep in task.dependencies):
+            newly_ready.append(tid)
+            logger.info(f"🔓 [Worker] 任务 [{tid}] 依赖已满足，加入 ready_tasks")
+    return newly_ready
+
+
 def _build_conversation_history(state: AgentState, max_messages: int = 5) -> str:
-    """从 AgentState.messages 中提取近期对话历史（排除本轮用户消息），
-    格式化为 Worker 可读的文本，让 Worker 能引用上一轮的分析结果。
-    优化：减少历史消息数量以加快处理速度。"""
     messages = state.get("messages") or []
-    # messages 最后一条是本轮用户输入，排除它
     history = messages[:-1] if messages else []
-    # 只取最近 max_messages 条（减少到 5 条以提升速度）
     history = history[-max_messages:]
     if not history:
         return "无"
@@ -55,14 +65,14 @@ async def worker_node(state: AgentState) -> dict:
     
     if not task_id or task_id not in tasks:
         logger.error(f"❌ [Worker] 当前任务ID无效或不存在: {task_id}, 可用任务: {list(tasks.keys())}")
-        return state  # 返回原状态，避免破坏状态结构
+        return {}  # 什么都不更新，避免干扰 add_int 计数器
     
     task = tasks.get(task_id)
     
     # 如果任务已经是 running 或 completed，跳过
     if task.status == "completed":
         logger.info(f"⏭️ [Worker] 任务 {task_id} 已完成，跳过")
-        return state
+        return {}
     
     # 标记任务为 running
     if task.status == "pending":
@@ -71,7 +81,7 @@ async def worker_node(state: AgentState) -> dict:
     
     if task.status != "running":
         logger.warning(f"⚠️ [Worker] 任务 {task_id} 状态异常: {task.status}")
-        return state
+        return {}
         
     try:
         user_input = state.get("user_input", "未提供")
@@ -219,11 +229,13 @@ async def worker_node(state: AgentState) -> dict:
 
         task.status = "completed"
         logger.info(f"✅ [Worker] 任务 {task_id} 执行完成，结果: {str(task.result)[:120]}")
+        newly_ready = _compute_newly_ready(tasks, task_id)
         return {
             "current_task_id": task_id,
             "tasks": {task_id: task},
             "tool_history": collected_tool_calls,
             "task_results": {task_id: task.result or ""},
+            "ready_tasks": newly_ready,   # 解锁的下游任务
         }
     except Exception as e:
         task.status = "failed"

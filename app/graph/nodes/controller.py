@@ -8,7 +8,7 @@ from app.graph.state import AgentState
 
 logger = logging.getLogger(__name__)
 
-
+#确保大模型返回标准意图判断
 def _parse_intent_from_text(answer: str) -> str:
     if not answer:
         raise ValueError("模型未返回可解析的文本内容")

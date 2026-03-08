@@ -2,7 +2,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from app.llm.client import get_llm
 
-
+#普通调用大模型的封装
 async def call_llm(
     messages: List[Dict[str, Any]],
     system: Optional[str] = None,
@@ -38,7 +38,8 @@ async def call_llm(
     except Exception as e:
         return {"content": "", "tool_calls": None, "error": str(e)}
 
-
+#流式调用大模型的封装
+#注意：仅用于无工具调用的最终输出节点
 async def call_llm_stream(
     messages: List[Dict[str, Any]],
     system: Optional[str] = None,

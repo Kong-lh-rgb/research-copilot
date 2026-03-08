@@ -16,16 +16,6 @@ REVIEWER_PROMPT_TEXT = """你是一个专业的研究报告汇总员。
 """
 
 
-def _get_queue(thread_id: str) -> asyncio.Queue | None:
-    if not thread_id:
-        return None
-    try:
-        from app.main import app as _app
-        return getattr(_app.state, "stream_queues", {}).get(thread_id)
-    except Exception:
-        return None
-
-
 async def reviewer_node(state: AgentState, config: RunnableConfig) -> dict:
     queue = config.get("configurable", {}).get("stream_queue")
 

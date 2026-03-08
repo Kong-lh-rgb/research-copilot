@@ -31,16 +31,6 @@ def _build_tool_context(state: AgentState) -> str:
     return "\n\n【本轮使用的工具（摘要）】\n" + "\n".join(lines) + "\n"
 
 
-def _get_queue(thread_id: str) -> asyncio.Queue | None:
-    if not thread_id:
-        return None
-    try:
-        from app.main import app as _app
-        return getattr(_app.state, "stream_queues", {}).get(thread_id)
-    except Exception:
-        return None
-
-
 async def simple_chat_node(state: AgentState, config: RunnableConfig) -> dict:
     # 核心修改：从 config 安全获取 queue
     queue = config.get("configurable", {}).get("stream_queue")
@@ -55,6 +45,7 @@ async def simple_chat_node(state: AgentState, config: RunnableConfig) -> dict:
         # ⚠️ 只推送 content_token，不推送模型的 thinking（reasoning_content）
         # 避免在前端"思考过程"面板中显示混乱的模型内部思考
         c = chunk.get("content", "")
+        print(f"simple_chat_node: received chunk: {c}")
         if c:
             full_content += c
             if queue:
