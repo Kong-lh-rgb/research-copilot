@@ -33,7 +33,7 @@ export function ChatInput({ onSend, onStop, onRegenerate, onOpenSettings, isStre
 
   return (
     <div className="border-t border-border/60 bg-background/80 px-5 py-4 backdrop-blur">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-3">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
         <Textarea
           ref={textareaRef}
           placeholder="问我任何问题，或者让我执行任务…"

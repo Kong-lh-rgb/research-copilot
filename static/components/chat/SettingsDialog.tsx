@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X } from "lucide-react";
+import { X, Sun, Moon, Monitor } from "lucide-react";
+import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -22,6 +23,7 @@ type SettingsDialogProps = {
 const STORAGE_KEY = "deep-research-settings";
 
 export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
+  const { theme, setTheme } = useTheme();
   const [values, setValues] = useState<SettingsValues>({
     model: "gpt-4o-mini",
     apiKey: "",
@@ -132,6 +134,39 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 onChange={(event) => updateField("mcpCommand", event.target.value)}
               />
             </label>
+          </section>
+
+          <Separator />
+
+          <section className="space-y-4">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">外观主题</h3>
+              <p className="mt-1 text-xs text-muted-foreground">选择界面的亮暗模式。</p>
+            </div>
+            <div className="flex gap-2">
+              {(
+                [
+                  { value: "light", label: "浅色", icon: Sun },
+                  { value: "dark", label: "深色", icon: Moon },
+                  { value: "system", label: "跟随系统", icon: Monitor },
+                ] as const
+              ).map(({ value, label, icon: Icon }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setTheme(value)}
+                  className={[
+                    "flex flex-1 flex-col items-center gap-1.5 rounded-xl border py-3 text-xs font-medium transition-colors",
+                    theme === value
+                      ? "border-primary/50 bg-primary/10 text-primary"
+                      : "border-border/60 bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  ].join(" ")}
+                >
+                  <Icon className="h-4 w-4" />
+                  {label}
+                </button>
+              ))}
+            </div>
           </section>
         </CardContent>
 

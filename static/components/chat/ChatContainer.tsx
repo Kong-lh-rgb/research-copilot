@@ -51,16 +51,37 @@ export function ChatContainer() {
     useChatStream();
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const userScrolledUpRef = useRef(false);   // true when user manually scrolled up
+  const wasStreamingRef = useRef(false);      // track streaming edge
+
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const hydratedRef = useRef(false);
   const prevStreamingRef = useRef(false);
 
-  // Auto-scroll
+  // ─── Smart auto-scroll ────────────────────────────────────────────────────
+  // When streaming kicks off, snap to bottom and clear the "user scrolled up" flag.
   useEffect(() => {
+    if (isStreaming && !wasStreamingRef.current) {
+      userScrolledUpRef.current = false;
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    }
+    wasStreamingRef.current = isStreaming;
+  }, [isStreaming]);
+
+  // Follow new messages only when the user hasn't scrolled away.
+  useEffect(() => {
+    if (userScrolledUpRef.current) return;
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages]);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // If user is within 80px of the bottom, consider them "at the bottom"
+    userScrolledUpRef.current = el.scrollHeight - el.scrollTop - el.clientHeight > 80;
+  }, []);
 
   // ─── Bootstrap: load sessions based on auth state ─────────────────────────
   useEffect(() => {
@@ -235,7 +256,7 @@ export function ChatContainer() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-gradient-to-b from-background via-background to-muted/30">
-      <TopBar onNewConversation={handleCreateSession} />
+      <TopBar />
       <main className="flex min-h-0 flex-1 overflow-hidden">
         <ChatSidebar
           sessions={sessions}
@@ -244,41 +265,45 @@ export function ChatContainer() {
           onCreateSession={handleCreateSession}
           onDeleteSession={auth.user ? handleDeleteSession : undefined}
         />
-        <div className="mx-auto flex h-full min-h-0 w-full max-w-4xl flex-col gap-6 px-5 py-6">
-          <div
-            ref={scrollRef}
-            className="scrollbar-elegant flex h-full min-h-0 flex-col gap-6 overflow-y-auto rounded-3xl border border-border/60 bg-card/60 p-6 shadow-sm"
-          >
-            {messages.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center gap-4 text-center text-muted-foreground">
-                <p className="text-lg font-semibold text-foreground">欢迎使用深度研究助手</p>
-                <p className="max-w-md text-sm">
-                  {activeSession
-                    ? "当前会话已准备就绪。输入问题开始新的推理任务。"
-                    : "选择左侧会话或新建对话开始使用。"}
-                </p>
-              </div>
-            ) : (
-              messages.map((message) => <ChatMessage key={message.id} message={message} />)
-            )}
-            {error && (
-              <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-sm text-rose-600">
-                {error}
-              </div>
-            )}
+        {/* Right panel: messages + input, aligned together */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-6 overflow-hidden px-5 pt-6">
+            <div
+              ref={scrollRef}
+              onScroll={handleScroll}
+              className="scrollbar-elegant flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto rounded-3xl border border-border/60 bg-card/60 p-6 shadow-sm"
+            >
+              {messages.length === 0 ? (
+                <div className="flex h-full flex-col items-center justify-center gap-4 text-center text-muted-foreground">
+                  <p className="text-lg font-semibold text-foreground">欢迎使用深度研究助手</p>
+                  <p className="max-w-md text-sm">
+                    {activeSession
+                      ? "当前会话已准备就绪。输入问题开始新的推理任务。"
+                      : "选择左侧会话或新建对话开始使用。"}
+                  </p>
+                </div>
+              ) : (
+                messages.map((message) => <ChatMessage key={message.id} message={message} />)
+              )}
+              {error && (
+                <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-sm text-rose-600">
+                  {error}
+                </div>
+              )}
+            </div>
           </div>
+          <ChatInput
+            onSend={sendMessage}
+            onStop={stop}
+            onRegenerate={() => {
+              const lastUser = [...messages].reverse().find((msg) => msg.role === "user");
+              if (lastUser) sendMessage(lastUser.content);
+            }}
+            onOpenSettings={() => setSettingsOpen(true)}
+            isStreaming={isStreaming}
+          />
         </div>
       </main>
-      <ChatInput
-        onSend={sendMessage}
-        onStop={stop}
-        onRegenerate={() => {
-          const lastUser = [...messages].reverse().find((msg) => msg.role === "user");
-          if (lastUser) sendMessage(lastUser.content);
-        }}
-        onOpenSettings={() => setSettingsOpen(true)}
-        isStreaming={isStreaming}
-      />
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
       {/* User auth – fixed bottom-right */}
