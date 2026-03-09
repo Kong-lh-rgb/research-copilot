@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from functools import wraps
 from io import StringIO
 import requests
+import tushare as ts
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -24,6 +25,7 @@ SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
 SMTP_SERVER = "smtp.163.com"
 SMTP_PORT = 465
+TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN", "").strip()
 
 mcp = FastMCP("Finance-Data-Server")
 
@@ -64,6 +66,81 @@ def _stock_prefix(symbol: str) -> str:
     if s.startswith(("8", "4")):
         return "bj"
     return "sz"
+
+
+def _normalize_ts_code(symbol: str) -> str:
+    """Convert raw symbol (e.g. 600519) to Tushare ts_code format (e.g. 600519.SH)."""
+    s = symbol.strip().upper()
+    if "." in s:
+        return s
+    if len(s) != 6 or not s.isdigit():
+        raise ValueError(f"无效 A 股代码: {symbol}")
+    suffix = "SH" if s.startswith("6") else "SZ"
+    return f"{s}.{suffix}"
+
+
+def _get_tushare_pro_client():
+    if not TUSHARE_TOKEN:
+        raise ValueError("未配置 TUSHARE_TOKEN，请在 .env 中设置后重启服务")
+    ts.set_token(TUSHARE_TOKEN)
+    return ts.pro_api()
+
+
+@ttl_cache(ttl_seconds=3600)
+def _tushare_financial_report(
+    symbol: str,
+    report_type: str = "income",
+    period: str = "latest",
+    limit: int = 6,
+) -> dict:
+    """Fetch structured financial statement data from Tushare."""
+    pro = _get_tushare_pro_client()
+    ts_code = _normalize_ts_code(symbol)
+
+    fields_map = {
+        "income": "ts_code,ann_date,end_date,basic_eps,total_revenue,revenue,operate_profit,total_profit,n_income,n_income_attr_p",
+        "balancesheet": "ts_code,ann_date,end_date,total_assets,total_liab,total_hldr_eqy_exc_min_int,undistr_porfit,money_cap",
+        "cashflow": "ts_code,ann_date,end_date,n_cashflow_act,n_cashflow_inv_act,n_cash_flows_fnc_act,c_cash_equ_end_period",
+        "fina_indicator": "ts_code,ann_date,end_date,roe,roa,grossprofit_margin,netprofit_margin,debt_to_assets,current_ratio,bps,ocfps,eps",
+    }
+
+    if report_type not in fields_map:
+        raise ValueError("report_type 必须是 income/balancesheet/cashflow/fina_indicator 之一")
+
+    fetch_limit = max(1, min(int(limit), 12))
+    common_kwargs = {
+        "ts_code": ts_code,
+        "fields": fields_map[report_type],
+        "limit": fetch_limit,
+    }
+
+    if period and period != "latest":
+        period_compact = period.replace("-", "")
+        if len(period_compact) != 8 or not period_compact.isdigit():
+            raise ValueError("period 格式应为 YYYYMMDD 或 YYYY-MM-DD，或使用 latest")
+        common_kwargs["period"] = period_compact
+
+    if report_type == "income":
+        df = pro.income(**common_kwargs)
+    elif report_type == "balancesheet":
+        df = pro.balancesheet(**common_kwargs)
+    elif report_type == "cashflow":
+        df = pro.cashflow(**common_kwargs)
+    else:
+        df = pro.fina_indicator(**common_kwargs)
+
+    if df is None or df.empty:
+        raise ValueError(f"Tushare 未返回 {ts_code} 的 {report_type} 数据")
+
+    df = df.fillna("")
+    rows = df.to_dict(orient="records")
+    return {
+        "source": "tushare",
+        "ts_code": ts_code,
+        "report_type": report_type,
+        "period": period,
+        "rows": rows,
+    }
 
 
 # ─── 腾讯：实时行情 ────────────────────────────────────────────────────────────
@@ -286,12 +363,97 @@ def get_financial_indicators(symbol: str, market: str = "A") -> str:
             df = _hk_basic_info(symbol)
             info = dict(zip(df["item"], df["value"]))
             return json.dumps(info, ensure_ascii=False, default=str)
-        rows = _sina_profit_statement(symbol)
-        if not rows:
-            return json.dumps({"error": f"未找到 A 股 {symbol} 的财务数据"}, ensure_ascii=False)
-        return json.dumps(rows, ensure_ascii=False, default=str)
+        # Backward-compatible behavior: map to new stable tool (income statement)
+        data = _tushare_financial_report(
+            symbol=symbol,
+            report_type="income",
+            period="latest",
+            limit=6,
+        )
+        return json.dumps(data, ensure_ascii=False, default=str)
     except Exception as e:
+        # Fallback for resilience
+        try:
+            rows = _sina_profit_statement(symbol)
+            if rows:
+                return json.dumps(
+                    {
+                        "source": "sina_fallback",
+                        "ts_code": _normalize_ts_code(symbol),
+                        "report_type": "income",
+                        "period": "latest",
+                        "rows": rows,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+        except Exception:
+            pass
         return json.dumps({"error": f"获取财务数据失败: {e}"}, ensure_ascii=False)
+
+
+@mcp.tool()
+def get_financial_report(
+    symbol: str,
+    report_type: str = "income",
+    period: str = "latest",
+    limit: int = 6,
+    market: str = "A",
+) -> str:
+    """
+    获取上市公司财报/财务指标（稳定优先：Tushare API）。
+
+    参数:
+        symbol: 股票代码。A股6位(如 '600519')，港股5位(如 '01810')
+        report_type: income / balancesheet / cashflow / fina_indicator
+        period: latest 或具体报告期 YYYYMMDD(如 20241231)
+        limit: 返回最近多少期（1~12）
+        market: A 或 HK（HK 当前返回港股基础信息兜底）
+    """
+    try:
+        if market == "HK":
+            symbol = symbol.zfill(5)
+            df = _hk_basic_info(symbol)
+            info = dict(zip(df["item"], df["value"]))
+            return json.dumps(
+                {
+                    "source": "akshare_hk_basic",
+                    "symbol": symbol,
+                    "report_type": report_type,
+                    "period": period,
+                    "rows": [info],
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+
+        data = _tushare_financial_report(
+            symbol=symbol,
+            report_type=report_type,
+            period=period,
+            limit=limit,
+        )
+        return json.dumps(data, ensure_ascii=False, default=str)
+    except Exception as e:
+        # For income reports, keep robust fallback
+        if report_type == "income":
+            try:
+                rows = _sina_profit_statement(symbol)
+                if rows:
+                    return json.dumps(
+                        {
+                            "source": "sina_fallback",
+                            "ts_code": _normalize_ts_code(symbol),
+                            "report_type": report_type,
+                            "period": period,
+                            "rows": rows,
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    )
+            except Exception:
+                pass
+        return json.dumps({"error": f"获取财报失败: {e}"}, ensure_ascii=False)
 
 
 # ─── MCP 工具：发送邮件 ────────────────────────────────────────────────────────

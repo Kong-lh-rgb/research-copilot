@@ -26,6 +26,26 @@ def _extract_user_id_from_token(token: Optional[str]) -> Optional[str]:
         return None
 
 
+def _build_tool_evidence_summary(tool_calls: list[dict], max_items: int = 8) -> str:
+    if not tool_calls:
+        return ""
+
+    lines = ["\n\n---\n\n## 引用来源 / 工具证据摘要"]
+    for idx, item in enumerate(tool_calls[:max_items], start=1):
+        tool_name = str(item.get("tool_name", "")).strip() or "unknown_tool"
+        raw_args = str(item.get("arguments", "")).strip() or "{}"
+        raw_output = str(item.get("output", "")).replace("\n", " ").strip()
+        output_excerpt = (raw_output[:140] + "…") if len(raw_output) > 140 else raw_output
+        lines.append(f"{idx}. **{tool_name}**")
+        lines.append(f"   - 参数：`{raw_args}`")
+        lines.append(f"   - 证据摘录：{output_excerpt or '（无输出）'}")
+
+    if len(tool_calls) > max_items:
+        lines.append(f"\n> 其余 {len(tool_calls) - max_items} 条工具调用已省略。")
+
+    return "\n".join(lines)
+
+
 async def _save_turn_to_db(
     token: str,
     thread_id: str,
@@ -125,6 +145,8 @@ async def _stream_chat_response(
         task_display = {}
         # 记录已推送出的工具调用索引，防止重复推送
         emitted_tool_indices = set()
+        collected_tool_calls_for_evidence: list[dict] = []
+        evidence_signatures: set[str] = set()
         graph_done = asyncio.Event()
 
         async def _run_graph():
@@ -179,6 +201,25 @@ async def _stream_chat_response(
                                 if idx in emitted_tool_indices:
                                     continue
                                 emitted_tool_indices.add(idx)
+
+                                signature = "|".join(
+                                    [
+                                        str(tool_call.get("task_id", "")),
+                                        str(tool_call.get("tool_name", "")),
+                                        str(tool_call.get("arguments", "")),
+                                        str(tool_call.get("output", ""))[:200],
+                                    ]
+                                )
+                                if signature not in evidence_signatures:
+                                    evidence_signatures.add(signature)
+                                    collected_tool_calls_for_evidence.append(
+                                        {
+                                            "task_id": tool_call.get("task_id", ""),
+                                            "tool_name": tool_call.get("tool_name", ""),
+                                            "arguments": tool_call.get("arguments", "{}"),
+                                            "output": tool_call.get("output", ""),
+                                        }
+                                    )
                                 
                                 queue.put_nowait({"type": "tool_call", "tool_name": tool_call.get("tool_name", ""), "arguments": tool_call.get("arguments", "{}")})
                                 queue.put_nowait({"type": "tool_result", "tool_name": tool_call.get("tool_name", ""), "result": tool_call.get("output", "")[:200]})
@@ -246,6 +287,10 @@ async def _stream_chat_response(
 
         # 只有在最终没有 content_token 推送内容时，才做 final 兜底（由前端保证不重复渲染）
         if final_reply:
+            evidence_summary = _build_tool_evidence_summary(collected_tool_calls_for_evidence)
+            if evidence_summary and "## 引用来源 / 工具证据摘要" not in final_reply:
+                final_reply = final_reply + evidence_summary
+
             if reply_holder is not None:
                 reply_holder.append(final_reply)
             yield _format_message("log", message="✅ 执行完毕", level="success")
