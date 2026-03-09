@@ -23,12 +23,31 @@ async def lifespan(app: FastAPI):
 
     await tool_registry.initialize()
 
+    # LangSmith observability startup diagnostics
+    ls_enabled = os.getenv("LANGSMITH_TRACING", "false").lower() == "true"
+    ls_api_key = os.getenv("LANGSMITH_API_KEY")
+    ls_project = os.getenv("LANGSMITH_PROJECT", "")
+    if ls_enabled:
+        if ls_api_key and ls_project:
+            logging.info("LangSmith tracing enabled (project=%s)", ls_project)
+        else:
+            logging.warning(
+                "LangSmith tracing enabled but API key/project missing; tracing may be ineffective"
+            )
+    else:
+        logging.info("LangSmith tracing disabled")
+
     pg_url = os.environ["DATABASE_URL"]  # e.g. postgresql://user:pass@host:5432/dbname
 
     # Initialise business-logic DB (users / threads / messages)
     from app.db.session import init_db, create_tables
     init_db(pg_url)
-    await create_tables()
+    db_auto_create_tables = os.getenv("DB_AUTO_CREATE_TABLES", "1") == "1"
+    if db_auto_create_tables:
+        await create_tables()
+        logging.info("DB_AUTO_CREATE_TABLES=1 -> auto create_tables enabled")
+    else:
+        logging.info("DB_AUTO_CREATE_TABLES=0 -> skip create_tables (use Alembic manually)")
 
     async with AsyncPostgresSaver.from_conn_string(pg_url) as checkpointer:
         await checkpointer.setup()  # 自动创建 checkpoints 表（幂等）

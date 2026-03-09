@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchMe, getStoredUser, getToken, login, register, removeToken, setToken } from "@/lib/api";
 import type { AuthUser } from "@/lib/types";
 
@@ -10,21 +10,22 @@ export type AuthState = {
 };
 
 export function useAuth() {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState(true);
+  const bootstrap = useMemo(() => {
+    if (typeof window === "undefined") {
+      return { token: null as string | null, user: null as AuthUser | null };
+    }
+    return { token: getToken(), user: getStoredUser() };
+  }, []);
+
+  const [user, setUser] = useState<AuthUser | null>(bootstrap.user);
+  const [loading, setLoading] = useState(Boolean(bootstrap.token && bootstrap.user));
 
   // On mount: restore session from localStorage and verify token
   useEffect(() => {
-    const stored = getStoredUser();
-    const token = getToken();
-
-    if (!token || !stored) {
-      setLoading(false);
+    if (!bootstrap.token || !bootstrap.user) {
       return;
     }
 
-    // Optimistically restore from localStorage, then verify with server
-    setUser(stored);
     fetchMe()
       .then((me) => setUser(me))
       .catch(() => {
@@ -32,7 +33,7 @@ export function useAuth() {
         setUser(null);
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [bootstrap.token, bootstrap.user]);
 
   const handleLogin = useCallback(async (username: string, password: string) => {
     const res = await login(username, password);

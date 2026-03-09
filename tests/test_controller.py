@@ -1,12 +1,23 @@
-from app.graph.nodes.controller import controller_node
-import logging
-logging.basicConfig(level=logging.INFO)
-def test_controller_node():
-    state = {
-        "user_input": "查询比亚迪和小米汽车的财报并作报告"
-    }
-    result = controller_node(state)
-    print(result)
+import pytest
 
-if __name__ == "__main__":
-    test_controller_node()
+from app.graph.nodes import controller as controller_module
+
+
+@pytest.mark.asyncio
+async def test_controller_node_simple_chat(monkeypatch):
+    async def fake_call_llm(**kwargs):
+        return {"content": '{"intent": "simple_chat"}'}
+
+    monkeypatch.setattr(controller_module, "call_llm", fake_call_llm)
+    result = await controller_module.controller_node({"user_input": "你好"})
+    assert result["next_action"] == "simple_chat"
+
+
+@pytest.mark.asyncio
+async def test_controller_node_fallback_to_complex(monkeypatch):
+    async def fake_call_llm(**kwargs):
+        return {"content": "not json"}
+
+    monkeypatch.setattr(controller_module, "call_llm", fake_call_llm)
+    result = await controller_module.controller_node({"user_input": "随便问一下"})
+    assert result["next_action"] == "complex_research"

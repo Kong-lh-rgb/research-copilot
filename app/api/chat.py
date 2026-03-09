@@ -12,6 +12,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
+def _extract_user_id_from_token(token: Optional[str]) -> Optional[str]:
+    if not token:
+        return None
+    try:
+        from jose import jwt
+        from app.api.auth import SECRET_KEY, ALGORITHM
+
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id_str = payload.get("sub")
+        return user_id_str if isinstance(user_id_str, str) else None
+    except Exception:
+        return None
+
+
 async def _save_turn_to_db(
     token: str,
     thread_id: str,
@@ -86,6 +100,7 @@ async def _stream_chat_response(
     query: str,
     thread_id: str,
     reply_holder: Optional[list] = None,
+    trace_user_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     queue: asyncio.Queue = asyncio.Queue()
     request.app.state.stream_queues[thread_id] = queue
@@ -118,7 +133,20 @@ async def _stream_chat_response(
                 # 监听 LangGraph 每一个步骤
                 async for step in compiled_graph.astream(
                     turn_state,
-                    config={"configurable": {"thread_id": thread_id, "stream_queue": queue}},
+                    config={
+                        "run_name": "chat_stream_turn",
+                        "tags": ["api:chat", "stream", f"thread:{thread_id}"],
+                        "metadata": {
+                            "thread_id": thread_id,
+                            "has_auth_user": bool(trace_user_id),
+                            "user_id": trace_user_id,
+                            "query_len": len(query or ""),
+                        },
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "stream_queue": queue,
+                        },
+                    },
                 ):
                     for node_name, node_output in step.items():
                         if node_name == "__start__":
@@ -245,11 +273,17 @@ async def chat_stream(request: Request, body: ChatRequest):
         if auth_header.startswith("Bearer ")
         else None
     )
+    trace_user_id = _extract_user_id_from_token(token)
 
     async def generate():
         reply_holder: list[str] = []
         async for message in _stream_chat_response(
-            request, compiled_graph, body.query, thread_id, reply_holder
+            request,
+            compiled_graph,
+            body.query,
+            thread_id,
+            reply_holder,
+            trace_user_id,
         ):
             yield f"data: {message}\n\n"
 

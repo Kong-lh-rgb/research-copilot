@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { X, Sun, Moon, Monitor } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
@@ -21,27 +21,27 @@ type SettingsDialogProps = {
 };
 
 const STORAGE_KEY = "deep-research-settings";
+const DEFAULT_VALUES: SettingsValues = {
+  model: "gpt-4o-mini",
+  apiKey: "",
+  baseUrl: "",
+  mcpCommand: "",
+};
 
 export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const { theme, setTheme } = useTheme();
-  const [values, setValues] = useState<SettingsValues>({
-    model: "gpt-4o-mini",
-    apiKey: "",
-    baseUrl: "",
-    mcpCommand: "",
-  });
-
-  useEffect(() => {
-    if (!open) return;
+  const [values, setValues] = useState<SettingsValues>(() => {
+    if (typeof window === "undefined") {
+      return DEFAULT_VALUES;
+    }
     try {
       const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        setValues((prev) => ({ ...prev, ...JSON.parse(raw) }));
-      }
+      if (!raw) return DEFAULT_VALUES;
+      return { ...DEFAULT_VALUES, ...JSON.parse(raw) };
     } catch {
-      // ignore
+      return DEFAULT_VALUES;
     }
-  }, [open]);
+  });
 
   const updateField = (key: keyof SettingsValues, value: string) => {
     setValues((prev) => ({ ...prev, [key]: value }));

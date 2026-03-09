@@ -1,0 +1,2 @@
+Single-database Alembic configuration for the project.
+Use env var DATABASE_URL when running migrations.
