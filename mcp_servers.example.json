@@ -15,6 +15,13 @@
       "env": {
         "AMAP_MAPS_API_KEY": "${AMAP_MAPS_API_KEY}"
       }
+    },
+    "brave-search": {
+      "type": "node",
+      "package": "@brave/brave-search-mcp-server",
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+      }
     }
   }
 }
