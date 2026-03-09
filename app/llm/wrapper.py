@@ -1,6 +1,6 @@
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from app.llm.client import get_llm
+from app.llm.client import get_llm, get_llm_for_role
 
 #普通调用大模型的封装
 async def call_llm(
@@ -10,8 +10,9 @@ async def call_llm(
     tool_choice: Optional[str] = None,
     temperature: float = 0,
     model: Optional[str] = None,
+    role: Optional[str] = None, 
 ) -> Dict[str, Any]:
-    client = get_llm()
+    client = get_llm_for_role(role) if role else get_llm()
 
     request_messages = messages
     if system:
@@ -39,20 +40,15 @@ async def call_llm(
         return {"content": "", "tool_calls": None, "error": str(e)}
 
 #流式调用大模型的封装
-#注意：仅用于无工具调用的最终输出节点
 async def call_llm_stream(
     messages: List[Dict[str, Any]],
     system: Optional[str] = None,
     temperature: float = 0,
     model: Optional[str] = None,
+    role: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """流式调用 LLM（仅用于无工具调用的最终输出节点）。
-
-    每次 yield 一个 chunk：
-    - {"thinking": "...", "content": "...", "done": False}  — 中间 token
-    - {"thinking": "", "content": "", "done": True}         — 结束
-    """
-    client = get_llm()
+    """流式调用 LLM"""
+    client = get_llm_for_role(role) if role else get_llm()
 
     request_messages = messages
     if system:

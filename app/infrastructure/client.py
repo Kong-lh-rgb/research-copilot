@@ -88,19 +88,42 @@ class MCPToolClient:
 
         logger.info(f"✅ MCP 客户端已连接: {self.command} {' '.join(self.args)}")
 
+    async def restart(self) -> None:
+        """关闭并重新启动 MCP 连接（子进程意外退出时自动恢复）。"""
+        logger.warning(f"🔄 MCP 子进程已断开，尝试重连: {self.command} {' '.join(self.args)}")
+        try:
+            await self._exit_stack.aclose()
+        except Exception:
+            pass
+        self._session = None
+        self._exit_stack = AsyncExitStack()
+        await self.start()
+        logger.info(f"✅ MCP 重连成功: {self.command} {' '.join(self.args)}")
+
     async def get_tools(self) -> List[Tool]:
-        """获取该 MCP Server 暴露的工具列表。"""
+        """获取该 MCP Server 暴露的工具列表，连接断开时自动重连一次。"""
         if not self._session:
             raise RuntimeError("MCP 客户端未启动，请先调用 start()")
-        response = await self._session.list_tools()
-        return response.tools
+        try:
+            response = await self._session.list_tools()
+            return response.tools
+        except Exception as e:
+            logger.warning(f"⚠️ list_tools 失败（{e}），尝试重连...")
+            await self.restart()
+            response = await self._session.list_tools()
+            return response.tools
 
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
-        """执行指定工具并返回结果。"""
+        """执行指定工具，连接断开时自动重连一次。"""
         if not self._session:
             raise RuntimeError("MCP 客户端未启动，请先调用 start()")
         logger.info(f"🔧 执行工具: {name} | 参数: {arguments}")
-        return await self._session.call_tool(name, arguments)
+        try:
+            return await self._session.call_tool(name, arguments)
+        except Exception as e:
+            logger.warning(f"⚠️ call_tool [{name}] 失败（{e}），尝试重连...")
+            await self.restart()
+            return await self._session.call_tool(name, arguments)
 
     async def close(self) -> None:
         """优雅关闭：断开连接并清理资源。"""

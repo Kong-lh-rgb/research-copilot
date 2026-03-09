@@ -12,7 +12,16 @@ logger = logging.getLogger(__name__)
 
 
 def router_after_controller(state: AgentState) -> str:
-    return "planner" if state.get("next_action") == "complex_research" else "simple_chat"
+    action = state.get("next_action")
+    if action == "complex_research":
+        return "planner"
+    elif action == "resume_research":
+        return "resumer"
+    else:
+        return "simple_chat"
+
+def resumer_node(state: AgentState) -> dict:
+    return {}
 
 def distribute_tasks(state: AgentState):
     """基于 ready_tasks 队列派发 worker，O(k)（k = 当前就绪任务数）。
@@ -30,13 +39,19 @@ def distribute_tasks(state: AgentState):
     # 从 tasks dict 实时推导状态计数（防止 add_int 跨对话污染）
     completed = sum(1 for t in tasks.values() if t.status == "completed")
     failed    = sum(1 for t in tasks.values() if t.status == "failed")
+    suspended = sum(1 for t in tasks.values() if t.status == "suspended")
     running   = sum(1 for t in tasks.values() if t.status == "running")
     total     = len(tasks)
 
-    # ① 有任务失败 → 立即终止
-    if failed > 0:
-        logger.error(f"🛑 [Distributor] 检测到 {failed} 个失败任务，中断执行")
+    # ① 如果有挂起任务且无其他运行中的任务，挂起执行，等待用户输入（不进入审查总结）
+    if suspended > 0 and running == 0:
+        logger.info(f"⏸️ [Distributor] 检测到 {suspended} 个挂起任务，中断执行等待用户输入")
         return END
+
+    # ② 有任务失败 → 进入 reviewer 生成失败总结（而非直接 END）
+    if failed > 0:
+        logger.error(f"🛑 [Distributor] 检测到 {failed} 个失败任务，中断执行，转入 reviewer 生成错误总结")
+        return "reviewer"
 
     # ② 全部完成 → 进入 reviewer
     if completed >= total:
@@ -70,6 +85,7 @@ def build_graph():
     graph.add_node("planner", planner_node)
     graph.add_node("worker", worker_node)
     graph.add_node("reviewer", reviewer_node)
+    graph.add_node("resumer", resumer_node)
     graph.set_entry_point("controller")
 
     graph.add_conditional_edges(
@@ -77,8 +93,15 @@ def build_graph():
         router_after_controller,
         {
             "simple_chat": "simple_chat",
-            "planner": "planner"
+            "planner": "planner",
+            "resumer": "resumer"
         }
+    )
+    
+    graph.add_conditional_edges(
+        "resumer",
+        distribute_tasks,
+        ["worker", "reviewer", END]
     )
     
     graph.add_conditional_edges(

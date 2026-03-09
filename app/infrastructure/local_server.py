@@ -4,6 +4,7 @@ import json
 import os
 import time
 import smtplib
+import ssl
 import http.client
 from email.mime.text import MIMEText
 from email.utils import formataddr
@@ -456,46 +457,78 @@ def get_financial_report(
         return json.dumps({"error": f"获取财报失败: {e}"}, ensure_ascii=False)
 
 
+# ─── 邮件：HTML 模板 ─────────────────────────────────────────────────────────
+
+# 邮件 HTML 外壳样式
+_EMAIL_CSS = """
+    body  { font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6;
+            color: #333; max-width: 860px; margin: 0 auto; padding: 24px; }
+    h1, h2, h3 { color: #2c3e50; border-bottom: 1px solid #eee; padding-bottom: 8px; }
+    table { border-collapse: collapse; width: 100%; margin: 20px 0; font-size: 14px; }
+    th, td { border: 1px solid #ddd; padding: 10px 12px; text-align: left; }
+    th    { background: #f8f9fa; font-weight: bold; }
+    tr:nth-child(even) { background: #f9f9f9; }
+    code  { background: #f4f4f4; padding: 2px 5px; border-radius: 4px; font-size: 13px; }
+    pre   { background: #f4f4f4; padding: 12px; border-radius: 6px; overflow-x: auto; }
+    blockquote { border-left: 4px solid #ccc; margin: 0; padding-left: 16px; color: #666; }
+    .footer { margin-top: 40px; font-size: 12px; color: #999; border-top: 1px solid #eee;
+              padding-top: 12px; }
+"""
+
+
+def _render_email_html(markdown_body: str) -> str:
+    """将 Markdown 正文渲染为完整的 HTML 邮件文档。"""
+    html_body = markdown.markdown(markdown_body, extensions=["tables", "fenced_code"])
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <style>{_EMAIL_CSS}</style>
+</head>
+<body>
+{html_body}
+<div class="footer">由 AI 投研助手自动生成</div>
+</body>
+</html>"""
+
+
+def _smtp_send(to_address: str, subject: str, html: str) -> None:
+    """建立 SMTP_SSL 连接并发送 HTML 邮件，失败时抛出异常。"""
+    if not SENDER_EMAIL:
+        raise ValueError("未配置 SENDER_EMAIL，请在 .env 中设置发件人邮箱地址")
+    if not SENDER_PASSWORD:
+        raise ValueError("未配置 SENDER_PASSWORD，请在 .env 中设置邮箱 SMTP 授权码")
+
+    msg = MIMEText(html, "html", "utf-8")
+    msg["From"]    = formataddr((str(Header("AI 投研助手", "utf-8")), SENDER_EMAIL))
+    msg["To"]      = to_address
+    msg["Subject"] = Header(subject, "utf-8")
+
+    with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT,
+                          context=ssl.create_default_context(),
+                          timeout=30) as smtp:
+        smtp.login(SENDER_EMAIL, SENDER_PASSWORD)
+        smtp.sendmail(SENDER_EMAIL, [to_address], msg.as_string())
+
+
 # ─── MCP 工具：发送邮件 ────────────────────────────────────────────────────────
 
 @mcp.tool()
 def send_email(to_address: str, subject: str, content: str) -> str:
     """
-    发送排版精美的 HTML 邮件给指定的收件人。
-    当用户要求发送报告时调用此工具。
+    将 Markdown 格式的研报内容渲染为 HTML 邮件并发送给指定收件人。
+    当用户要求发送报告或分析结果时调用此工具。
+
+    Args:
+        to_address: 收件人邮箱地址
+        subject:    邮件主题
+        content:    邮件正文（Markdown 格式）
     """
     try:
-        html_content = markdown.markdown(content, extensions=["tables", "fenced_code"])
-        beautiful_html = f"""
-        <html>
-        <head>
-        <style>
-            body {{ font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; padding: 20px; }}
-            h1, h2, h3 {{ color: #2c3e50; border-bottom: 1px solid #eee; padding-bottom: 10px; }}
-            table {{ border-collapse: collapse; width: 100%; margin: 20px 0; font-size: 14px; }}
-            th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
-            th {{ background-color: #f8f9fa; font-weight: bold; color: #333; }}
-            tr:nth-child(even) {{ background-color: #f9f9f9; }}
-            code {{ background-color: #f4f4f4; padding: 2px 5px; border-radius: 4px; }}
-            blockquote {{ border-left: 4px solid #ccc; margin-left: 0; padding-left: 16px; color: #666; }}
-        </style>
-        </head>
-        <body>
-        {html_content}
-        </body>
-        </html>
-        """
-        message = MIMEText(beautiful_html, "html", "utf-8")
-        message["From"] = formataddr((str(Header("AI 投研大脑", "utf-8")), SENDER_EMAIL))
-        message["To"] = to_address
-        message["Subject"] = Header(subject, "utf-8")
-        smtp_obj = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT)
-        smtp_obj.login(SENDER_EMAIL, SENDER_PASSWORD)
-        smtp_obj.sendmail(SENDER_EMAIL, [to_address], message.as_string())
-        smtp_obj.quit()
-        return f"✅ 成功！排版精美的研报已发送至 {to_address}。"
+        _smtp_send(to_address, subject, _render_email_html(content))
+        return f"✅ 邮件已发送至 {to_address}。"
     except Exception as e:
-        return f"❌ 邮件发送失败: {str(e)}"
+        return f"❌ 邮件发送失败: {e}"
 
 
 if __name__ == "__main__":

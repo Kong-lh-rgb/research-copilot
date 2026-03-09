@@ -4,11 +4,6 @@
       "type": "python",
       "script_or_package": "app/infrastructure/local_server.py"
     },
-    "weather": {
-      "type": "python",
-      "script_or_package": "weather.py",
-      "cwd": "${WEATHER_MCP_DIR}"
-    },
     "amap-maps": {
       "type": "node",
       "package": "@amap/amap-maps-mcp-server",

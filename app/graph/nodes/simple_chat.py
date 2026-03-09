@@ -3,7 +3,7 @@ import logging
 from langchain_core.runnables import RunnableConfig
 from app.llm.wrapper import call_llm_stream
 from app.graph.state import AgentState
-from app.llm.prompts import SIMPLE_CHAT_PROMPT
+from app.llm.prompt_manager import render
 
 logger = logging.getLogger(__name__)
 
@@ -36,14 +36,12 @@ async def simple_chat_node(state: AgentState, config: RunnableConfig) -> dict:
     queue = config.get("configurable", {}).get("stream_queue")
 
     messages = [_to_openai_dict(m) for m in state.get("messages", [])]
-    system = SIMPLE_CHAT_PROMPT + _build_tool_context(state)
+    system = render("simple_chat") + _build_tool_context(state)
     full_content = ""
 
-    async for chunk in call_llm_stream(messages=messages, system=system, temperature=0.3):
+    async for chunk in call_llm_stream(messages=messages, system=system, temperature=0.3, role="simple_chat"):
         if chunk.get("done"):
             break
-        # ⚠️ 只推送 content_token，不推送模型的 thinking（reasoning_content）
-        # 避免在前端"思考过程"面板中显示混乱的模型内部思考
         c = chunk.get("content", "")
         if c:
             full_content += c

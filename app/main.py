@@ -5,6 +5,7 @@ logging.basicConfig(
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
+from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -50,11 +51,11 @@ async def lifespan(app: FastAPI):
         logging.info("DB_AUTO_CREATE_TABLES=0 -> skip create_tables (use Alembic manually)")
 
     async with AsyncPostgresSaver.from_conn_string(pg_url) as checkpointer:
-        await checkpointer.setup()  # 自动创建 checkpoints 表（幂等）
+        await checkpointer.setup()
         app.state.compiled_graph = build_graph().compile(checkpointer=checkpointer)
         app.state.checkpointer = checkpointer
-
         app.state.stream_queues = {}
+        app.state.hitl_pending = {}
         yield
 
 
@@ -81,10 +82,6 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(threads_router)
 app.include_router(chat_router)
-
-static_dir = Path(__file__).parent / "static"
-if static_dir.exists():
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.get("/")
 async def root():

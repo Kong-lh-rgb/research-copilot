@@ -18,7 +18,7 @@ _PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
 def _expand_env(value: Any) -> Any:
-    """递归展开字符串中的 ${ENV_VAR} 占位符，dict/list 递归处理。"""
+    """递归展开字符串中的 ${ENV_VAR} 占位符dict/list 递归处理。"""
     if isinstance(value, str):
         return os.path.expandvars(value)
     if isinstance(value, dict):
@@ -31,9 +31,9 @@ def _expand_env(value: Any) -> Any:
 def _resolve_binary(name: str) -> str:
     """
     动态寻找可执行文件路径：
-    1. 优先读取 {NAME_UPPER}_BIN 环境变量（e.g. UV_BIN, NPX_BIN）
+    1. 优先读取 {NAME_UPPER}_BIN 环境变量
     2. 降级到 shutil.which(name)
-    3. 再降级直接返回 name（交由系统 PATH 处理）
+    3. 再降级直接返回 name
     """
     env_key = f"{name.upper()}_BIN"
     from_env = os.getenv(env_key, "").strip()
@@ -55,13 +55,12 @@ class MCPRegistry:
         # 先展开所有 ${} 占位符
         cfg = _expand_env(server_config)
 
-        # 合并系统环境变量，防止丢失 PATH 等关键变量导致子进程命令找不到
+        # 始终以父进程完整环境变量为基础，再叠加配置文件中的 env 覆盖项
+        # 这样子进程能继承 SENDER_EMAIL / SENDER_PASSWORD 等主进程的变量
+        env = os.environ.copy()
         env_from_cfg: Optional[Dict[str, str]] = cfg.get("env")
         if env_from_cfg:
-            env = os.environ.copy()
             env.update(env_from_cfg)
-        else:
-            env = None
         
         cwd: Optional[str] = cfg.get("cwd")
 
@@ -174,12 +173,16 @@ class MCPRegistry:
                 logger.error(f"❌ 服务 [{service_name}] 启动失败，请检查配置或环境: {e}")
 
     async def get_all_tools(self) -> List[Tool]:
-        """获取全局所有可用的工具列表。"""
+        """获取全局所有可用的工具列表。单个客户端失败时跳过并告警，不影响其他工具可用性。"""
         all_tools = []
-        for client in self.clients.values():
-            if client._session:
+        for service_name, client in self.clients.items():
+            if not client._session:
+                continue
+            try:
                 tools = await client.get_tools()
                 all_tools.extend(tools)
+            except Exception as e:
+                logger.error(f"❌ 获取 [{service_name}] 工具列表失败，跳过: {e}")
         return all_tools
 
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:

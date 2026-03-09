@@ -7,6 +7,7 @@ import { ChatSidebar } from "@/components/chat/ChatSidebar";
 import { SettingsDialog } from "@/components/chat/SettingsDialog";
 import { TopBar } from "@/components/chat/TopBar";
 import { UserAuthDialog } from "@/components/chat/UserAuthDialog";
+import { HitlConfirmCard } from "@/components/chat/HitlConfirmCard";
 import { useChatStream } from "@/hooks/useChatStream";
 import { useAuth } from "@/hooks/useAuth";
 import { deleteThread, fetchThreadMessages, fetchThreads } from "@/lib/api";
@@ -47,7 +48,7 @@ function backendMsgsToChat(msgs: BackendMsg[]): ChatMessageType[] {
 
 export function ChatContainer() {
   const auth = useAuth();
-  const { messages, isStreaming, error, sendMessage, stop, loadConversation, resetConversation, threadId } =
+  const { messages, isStreaming, error, sendMessage, stop, loadConversation, resetConversation, threadId, hitlRequest, confirmHitl } =
     useChatStream();
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -292,6 +293,9 @@ export function ChatContainer() {
               )}
             </div>
           </div>
+          {hitlRequest && (
+            <HitlConfirmCard request={hitlRequest} onConfirm={confirmHitl} />
+          )}
           <ChatInput
             onSend={sendMessage}
             onStop={stop}

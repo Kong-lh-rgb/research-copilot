@@ -4,7 +4,7 @@ import { flushSync } from "react-dom";
 import { useCallback, useRef, useState } from "react";
 import { mockStream } from "@/lib/mockStream";
 import { getToken } from "@/lib/api";
-import type { AiMessage, ChatMessage, StreamEvent, TaskItem, ToolCall } from "@/lib/types";
+import type { AiMessage, ChatMessage, HitlRequest, StreamEvent, TaskItem, ToolCall } from "@/lib/types";
 
 const createId = () => Math.random().toString(36).slice(2);
 
@@ -23,6 +23,7 @@ export function useChatStream() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const [hitlRequest, setHitlRequest] = useState<HitlRequest | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const stopRef = useRef(false);
   const activeMessageIdRef = useRef<string | null>(null);
@@ -253,9 +254,16 @@ export function useChatStream() {
 
               try {
                 const event = JSON.parse(payload) as StreamEvent;
-                // content_token 用 flushSync 强制每个 token 独立触发一次渲染，
-                // 防止 React 18 自动批处理把多个 token 合并成一次 UI 更新
-                if (event.type === "content_token" || event.type === "thinking_token") {
+                // hitl_request 是独立的阻塞事件，不走 applyEvent
+                if (event.type === "hitl_request") {
+                  setHitlRequest({
+                    threadId: threadIdRef.current ?? "",
+                    taskId: event.task_id,
+                    toolName: event.tool_name,
+                    arguments: event.arguments,
+                    description: event.description,
+                  });
+                } else if (event.type === "content_token" || event.type === "thinking_token") {
                   flushSync(() => applyEvent(event));
                 } else {
                   applyEvent(event);
@@ -283,6 +291,7 @@ export function useChatStream() {
     setError(null);
     setIsStreaming(false);
     setMessages(nextMessages);
+    setHitlRequest(null);
   }, []);
 
   const resetConversation = useCallback(() => {
@@ -294,7 +303,24 @@ export function useChatStream() {
     setError(null);
     setIsStreaming(false);
     setMessages([]);
+    setHitlRequest(null);
   }, []);
 
-  return { messages, isStreaming, error, sendMessage, stop, loadConversation, resetConversation, threadId };
+  const confirmHitl = useCallback(async (approved: boolean) => {
+    const req = hitlRequest;
+    setHitlRequest(null);
+    if (!req?.threadId) return;
+    const backendBase = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+    try {
+      await fetch(`${backendBase.replace(/\/$/, "")}/chat/confirm/${req.threadId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved }),
+      });
+    } catch (e) {
+      console.error("HITL confirm failed:", e);
+    }
+  }, [hitlRequest]);
+
+  return { messages, isStreaming, error, sendMessage, stop, loadConversation, resetConversation, threadId, hitlRequest, confirmHitl };
 }

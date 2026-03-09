@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: yourpassword
+      POSTGRES_DB: deep_researcher
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - ./app:/app/app                          # 挂载源码，改代码无需重建镜像
+      - ./mcp_servers.json:/app/mcp_servers.json:ro
+    depends_on:
+      - postgres
+
+  frontend:
+    build: ./static
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8000
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

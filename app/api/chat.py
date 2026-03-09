@@ -1,86 +1,16 @@
 import asyncio
 import json
 import logging
-import uuid as _uuid
 from typing import AsyncGenerator, Optional
 from uuid import uuid4
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
+from app.services.chat_explainability import build_tool_evidence_summary
+from app.services.chat_persistence import extract_user_id_from_token, save_turn_to_db
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
-
-
-def _extract_user_id_from_token(token: Optional[str]) -> Optional[str]:
-    if not token:
-        return None
-    try:
-        from jose import jwt
-        from app.api.auth import SECRET_KEY, ALGORITHM
-
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id_str = payload.get("sub")
-        return user_id_str if isinstance(user_id_str, str) else None
-    except Exception:
-        return None
-
-
-def _build_tool_evidence_summary(tool_calls: list[dict], max_items: int = 8) -> str:
-    if not tool_calls:
-        return ""
-
-    lines = ["\n\n---\n\n## 引用来源 / 工具证据摘要"]
-    for idx, item in enumerate(tool_calls[:max_items], start=1):
-        tool_name = str(item.get("tool_name", "")).strip() or "unknown_tool"
-        raw_args = str(item.get("arguments", "")).strip() or "{}"
-        raw_output = str(item.get("output", "")).replace("\n", " ").strip()
-        output_excerpt = (raw_output[:140] + "…") if len(raw_output) > 140 else raw_output
-        lines.append(f"{idx}. **{tool_name}**")
-        lines.append(f"   - 参数：`{raw_args}`")
-        lines.append(f"   - 证据摘录：{output_excerpt or '（无输出）'}")
-
-    if len(tool_calls) > max_items:
-        lines.append(f"\n> 其余 {len(tool_calls) - max_items} 条工具调用已省略。")
-
-    return "\n".join(lines)
-
-
-async def _save_turn_to_db(
-    token: str,
-    thread_id: str,
-    user_query: str,
-    assistant_reply: str,
-) -> None:
-    """Persist a user/assistant message pair to PostgreSQL after stream ends."""
-    try:
-        from jose import jwt, JWTError
-        from app.api.auth import SECRET_KEY, ALGORITHM
-        from app.db.session import get_session_factory
-        from app.db import repository
-
-        factory = get_session_factory()
-        if factory is None:
-            return
-
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id_str: str | None = payload.get("sub")
-        if not user_id_str:
-            return
-
-        user_id = _uuid.UUID(user_id_str)
-        title = user_query[:30] if user_query else "新对话"
-
-        async with factory() as session:
-            await repository.get_or_create_thread(session, thread_id, user_id, title)
-            await repository.add_message(session, thread_id, "user", user_query)
-            if assistant_reply:
-                await repository.add_message(session, thread_id, "assistant", assistant_reply)
-            await repository.touch_thread(session, thread_id)
-            await session.commit()
-
-    except Exception as e:
-        logger.warning(f"Failed to persist turn to DB: {e}")
 
 
 class ChatRequest(BaseModel):
@@ -105,6 +35,13 @@ def _format_message(msg_type: str, **kwargs) -> str:
         payload.update({"tool_name": kwargs.get("tool_name", ""), "result": kwargs.get("result", "")})
     elif msg_type == "task_complete":
         payload["task_id"] = kwargs.get("task_id", "")
+    elif msg_type == "hitl_request":
+        payload.update({
+            "task_id": kwargs.get("task_id", ""),
+            "tool_name": kwargs.get("tool_name", ""),
+            "arguments": kwargs.get("arguments", "{}"),
+            "description": kwargs.get("description", ""),
+        })
     elif msg_type in ("thinking_token", "content_token"):
         payload["delta"] = kwargs.get("delta", "")
     elif msg_type == "final":
@@ -167,6 +104,7 @@ async def _stream_chat_response(
                         "configurable": {
                             "thread_id": thread_id,
                             "stream_queue": queue,
+                            "hitl_pending": request.app.state.hitl_pending,
                         },
                     },
                 ):
@@ -195,6 +133,9 @@ async def _stream_chat_response(
                         elif node_name == "worker":
                             current_task_id = node_output.get("current_task_id", "")
                             
+                            if "final_report" in node_output:
+                                final_reply = node_output["final_report"]
+                                
                             # 工具调用去重推送
                             tool_history = node_output.get("tool_history", [])
                             for idx, tool_call in enumerate(tool_history):
@@ -239,8 +180,22 @@ async def _stream_chat_response(
                                             queue.put_nowait({"type": "task_running", "task_id": current_task_id})
                                         elif new_status == "completed":
                                             queue.put_nowait({"type": "task_complete", "task_id": current_task_id})
+                                        elif new_status == "suspended":
+                                            error_message = task_node.error or "需要补充信息"
+                                            queue.put_nowait({"type": "task_failed", "task_id": current_task_id, "error": error_message})
+                                            queue.put_nowait({
+                                                "type": "log",
+                                                "message": f"⏸️ 子任务 {current_task_id} 挂起等待输入：{error_message}",
+                                                "level": "warning",
+                                            })
                                         elif new_status == "failed":
-                                            queue.put_nowait({"type": "task_failed", "task_id": current_task_id, "error": task_node.error or "未知错误"})
+                                            error_message = task_node.error or "未知错误"
+                                            queue.put_nowait({"type": "task_failed", "task_id": current_task_id, "error": error_message})
+                                            queue.put_nowait({
+                                                "type": "log",
+                                                "message": f"❌ 子任务 {current_task_id} 执行失败：{error_message}",
+                                                "level": "error",
+                                            })
 
                         elif node_name == "reviewer":
                             # 汇总时推 log
@@ -287,7 +242,7 @@ async def _stream_chat_response(
 
         # 只有在最终没有 content_token 推送内容时，才做 final 兜底（由前端保证不重复渲染）
         if final_reply:
-            evidence_summary = _build_tool_evidence_summary(collected_tool_calls_for_evidence)
+            evidence_summary = build_tool_evidence_summary(collected_tool_calls_for_evidence)
             if evidence_summary and "## 引用来源 / 工具证据摘要" not in final_reply:
                 final_reply = final_reply + evidence_summary
 
@@ -318,7 +273,7 @@ async def chat_stream(request: Request, body: ChatRequest):
         if auth_header.startswith("Bearer ")
         else None
     )
-    trace_user_id = _extract_user_id_from_token(token)
+    trace_user_id = extract_user_id_from_token(token)
 
     async def generate():
         reply_holder: list[str] = []
@@ -335,7 +290,10 @@ async def chat_stream(request: Request, body: ChatRequest):
         # Persist user query + assistant reply to PostgreSQL when authenticated
         if token:
             final_reply = reply_holder[0] if reply_holder else ""
-            await _save_turn_to_db(token, thread_id, body.query, final_reply)
+            try:
+                await save_turn_to_db(token, thread_id, body.query, final_reply)
+            except Exception as e:
+                logger.warning(f"Failed to persist turn to DB: {e}")
 
     return StreamingResponse(
         generate(),
@@ -346,3 +304,22 @@ async def chat_stream(request: Request, body: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class HitlConfirmRequest(BaseModel):
+    approved: bool
+
+
+@router.post("/confirm/{thread_id}")
+async def hitl_confirm(thread_id: str, body: HitlConfirmRequest, request: Request):
+    """Human-in-the-Loop 确认端点：前端用户点击"确认/取消"后调用此接口。"""
+    hitl_pending: dict = request.app.state.hitl_pending
+    future: asyncio.Future = hitl_pending.get(thread_id)
+    if future is None or future.done():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="没有等待确认的操作，可能已超时或已处理。")
+    future.set_result(body.approved)
+    hitl_pending.pop(thread_id, None)
+    action = "批准" if body.approved else "取消"
+    logger.info(f"✅ [HITL] thread={thread_id} 操作已{action}")
+    return {"status": "ok", "approved": body.approved}

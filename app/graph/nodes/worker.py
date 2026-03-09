@@ -2,10 +2,11 @@ import asyncio
 import json
 import logging
 from typing import List
+from langchain_core.runnables import RunnableConfig
 from app.llm.wrapper import call_llm, mcp_tools_to_openai_tools
 from app.graph.state import AgentState, ToolCall
 from app.infrastructure.setup import tool_registry
-from app.llm.prompts import WORKER_PROMPT
+from app.llm.prompt_manager import render
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,26 @@ MAX_TOOL_ROUNDS = 5
 TOOL_CALL_TIMEOUT = 30
 LLM_CALL_TIMEOUT = 180
 MAX_TOOL_OUTPUT_TO_LLM = 3000
+HITL_TIMEOUT = 120  # seconds to wait for human approval
+
+# 需要人工确认才能执行的敏感工具名称（不可逆/外部副作用操作）
+SENSITIVE_TOOLS: set[str] = {
+    "send_email",
+    "send_wechat",
+    "send_sms",
+    "send_message",
+    "create_order",
+    "transfer_money",
+}
+
+
+def _missing_tool_names(tool_calls: list, available_tool_names: set[str]) -> list[str]:
+    missing: list[str] = []
+    for tc in tool_calls:
+        name = tc.get("function", {}).get("name", "")
+        if name and name not in available_tool_names and name not in missing:
+            missing.append(name)
+    return missing
 
 
 def _compute_newly_ready(tasks: dict, completed_task_id: str) -> list:
@@ -50,13 +71,18 @@ def _build_conversation_history(state: AgentState, max_messages: int = 5) -> str
             role = getattr(m, "type", "")
             content = getattr(m, "content", "") or ""
         role_label = {"user": "用户", "human": "用户", "assistant": "AI", "ai": "AI"}.get(role, role)
-        # 截断超长内容（减少到 1000 字符）
-        snippet = content[:1000] + ("…" if len(content) > 1000 else "")
+        # 截断超长内容（每条消息最多 3000 字符，保留更多上下文）
+        snippet = content[:3000] + ("…" if len(content) > 3000 else "")
         lines.append(f"[{role_label}]: {snippet}")
     return "\n".join(lines)
 
 
-async def worker_node(state: AgentState) -> dict:
+async def worker_node(state: AgentState, config: RunnableConfig) -> dict:
+    configurable = (config or {}).get("configurable", {})
+    stream_queue = configurable.get("stream_queue")
+    hitl_pending: dict = configurable.get("hitl_pending", {})
+    hitl_thread_id: str = configurable.get("thread_id", "")
+
     tasks = state.get("tasks", {})
     task_id = state.get("current_task_id", "")
     
@@ -89,25 +115,43 @@ async def worker_node(state: AgentState) -> dict:
 
         
         dependencies_context = ""
-        if task.dependencies:
+        # 先加入明确声明的依赖任务结果
+        declared_deps = set(task.dependencies or [])
+        if declared_deps:
             for dep_id in task.dependencies:
                 dep_task = tasks.get(dep_id)
                 if dep_task and dep_task.result:
-                    dependencies_context += f"【前置任务 {dep_id} - {dep_task.description}】的结果是：\n{dep_task.result}\n\n"
+                    dependencies_context += f"【前置任务 {dep_id} - {dep_task.description}】的结果如下：\n{dep_task.result}\n\n"
+
+        # 无论是否有声明依赖，把 state 里所有已完成任务的结果也补充进来
+        # 这样续轮请求（如用户补充了邮箱）仍能看到上一轮的分析成果
+        for tid, t in tasks.items():
+            if tid in declared_deps:
+                continue  # 已加过，跳过
+            if t.status == "completed" and t.result and tid != task_id:
+                dependencies_context += f"【已完成任务 {tid} - {t.description}】的结果如下：\n{t.result}\n\n"
+
         if not dependencies_context:
             dependencies_context = "无"
 
-        system = WORKER_PROMPT.format(
+        all_tools = await tool_registry.get_all_tools()
+        openai_tools = mcp_tools_to_openai_tools(all_tools)
+        available_tool_names = {
+            t.get("function", {}).get("name", "")
+            for t in openai_tools
+            if t.get("function", {}).get("name")
+        }
+        logger.info(f"🛠️ [Worker] 可用工具: {sorted(available_tool_names)}")
+
+        system = render(
+            "worker",
             conversation_history=conversation_history,
             user_input=user_input,
             dependencies_context=dependencies_context,
             task_id=task.task_id,
-            task_description=task.description
+            task_description=task.description,
+            available_tools=sorted(available_tool_names),
         )
-        
-        all_tools = await tool_registry.get_all_tools()
-        openai_tools = mcp_tools_to_openai_tools(all_tools)
-        logger.info(f"🛠️ [Worker] 可用工具: {[t['function']['name'] for t in openai_tools]}")
 
         messages = [{"role": "user", "content": task.description}]
         collected_tool_calls: List[ToolCall] = []
@@ -125,6 +169,7 @@ async def worker_node(state: AgentState) -> dict:
                         system=system,
                         tools=openai_tools if openai_tools else None,
                         temperature=0.1,
+                        role="worker",
                     ),
                     timeout=LLM_CALL_TIMEOUT
                 )
@@ -139,9 +184,61 @@ async def worker_node(state: AgentState) -> dict:
             tool_calls = result.get("tool_calls")
 
             if not tool_calls:
-                task.result = result.get("content", "")
+                # ── 检测特殊控制信号 ─────────────────────────────────────────
+                raw_content = (result.get("content") or "").strip()
+                if raw_content:
+                    try:
+                        import re as _re
+                        # 兼容 LLM 在 content 外面包了 markdown 代码块的情况
+                        json_str = _re.sub(r"^```[\w]*\n?", "", raw_content)
+                        json_str = _re.sub(r"\n?```$", "", json_str).strip()
+                        # 只取第一个 JSON 对象，防止前后有多余文字
+                        m = _re.search(r"\{[\s\S]*\}", json_str)
+                        if m:
+                            signal = json.loads(m.group(0))
+
+                            # ── cannot_complete：工具未接入 或 缺少必要用户信息，挂起等待输入 ──
+                            if signal.get("cannot_complete"):
+                                reason = signal.get("reason", "需要用户信息补充")
+                                task.status = "suspended"
+                                task.error = reason
+                                logger.error(
+                                    f"⏸️ [Worker] 任务 {task_id} 主动挂起，等待用户补充信息: {reason}"
+                                )
+                                return {
+                                    "current_task_id": task_id,
+                                    "tasks": {task_id: task},
+                                    "tool_history": collected_tool_calls,
+                                    "messages": [{"role": "assistant", "content": f"任务挂起需要补充信息：\n{reason}"}],
+                                    "final_report": f"为了继续完成任务，我需要您补充以下信息：\n{reason}",
+                                }
+
+                    except (json.JSONDecodeError, ValueError):
+                        pass  # 正常文本内容，不是信号
+                # ── 正常完成 ─────────────────────────────────────────────────
+                task.result = raw_content
                 logger.info(f"✅ [Worker] 任务 {task_id} 第 {round_idx + 1} 轮完成，无需调用工具")
                 break
+
+            missing_tools = _missing_tool_names(tool_calls, available_tool_names)
+            if missing_tools:
+                available = sorted(available_tool_names)
+                task.status = "failed"
+                task.error = (
+                    "任务无法继续：缺少所需工具 "
+                    f"{', '.join(missing_tools)}。"
+                    f"当前可用工具：{', '.join(available) if available else '无'}。"
+                    "请检查 mcp_servers.json 配置、MCP 服务启动状态或工具名称是否正确。"
+                )
+                logger.error(
+                    f"❌ [Worker] 任务 {task_id} 请求了不可用工具: {missing_tools}; "
+                    f"可用工具: {available}"
+                )
+                return {
+                    "current_task_id": task_id,
+                    "tasks": {task_id: task},
+                    "tool_history": collected_tool_calls,
+                }
 
             logger.info(f"🔧 [Worker] 第 {round_idx + 1} 轮，LLM 请求调用 {len(tool_calls)} 个工具")
 
@@ -150,6 +247,55 @@ async def worker_node(state: AgentState) -> dict:
                 "content": result.get("content") or "",
                 "tool_calls": tool_calls,
             })
+
+            # ── Human-in-the-Loop：敏感工具执行前请求人工确认 ──────────────
+            sensitive_in_round = [
+                tc for tc in tool_calls
+                if tc.get("function", {}).get("name", "") in SENSITIVE_TOOLS
+            ]
+            if sensitive_in_round and hitl_thread_id:
+                # 取第一个敏感工具的信息（通常每轮只有一个）
+                first = sensitive_in_round[0]
+                s_name = first["function"]["name"]
+                s_args = first["function"].get("arguments", "{}")
+                description = f"即将执行 {len(sensitive_in_round)} 个敏感操作：" + \
+                              "、".join(tc["function"]["name"] for tc in sensitive_in_round)
+
+                logger.warning(
+                    f"⏸️ [Worker] 任务 {task_id} 触发 HITL，等待用户确认: {s_name}"
+                )
+                if stream_queue:
+                    stream_queue.put_nowait({
+                        "type": "hitl_request",
+                        "task_id": task_id,
+                        "tool_name": s_name,
+                        "arguments": s_args,
+                        "description": description,
+                    })
+
+                loop = asyncio.get_event_loop()
+                future: asyncio.Future = loop.create_future()
+                hitl_pending[hitl_thread_id] = future
+
+                try:
+                    approved = await asyncio.wait_for(
+                        asyncio.shield(future), timeout=HITL_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    hitl_pending.pop(hitl_thread_id, None)
+                    task.status = "failed"
+                    task.error = f"等待用户确认超时（{HITL_TIMEOUT}秒），任务已取消"
+                    logger.error(f"⏱️ [Worker] HITL 超时，任务 {task_id} 取消")
+                    return {"current_task_id": task_id, "tasks": {task_id: task}, "tool_history": collected_tool_calls}
+
+                if not approved:
+                    task.status = "failed"
+                    task.error = "用户取消了操作，任务未执行"
+                    logger.info(f"🚫 [Worker] 任务 {task_id} 被用户取消")
+                    return {"current_task_id": task_id, "tasks": {task_id: task}, "tool_history": collected_tool_calls}
+
+                logger.info(f"✅ [Worker] 用户确认，继续执行任务 {task_id}")
+            # ── End HITL ─────────────────────────────────────────────────────
 
             # ⚡ 并行执行所有工具调用（性能优化）
             async def execute_single_tool(tc):

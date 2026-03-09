@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { fetchMe, getStoredUser, getToken, login, register, removeToken, setToken } from "@/lib/api";
 import type { AuthUser } from "@/lib/types";
 
@@ -10,19 +10,17 @@ export type AuthState = {
 };
 
 export function useAuth() {
-  const bootstrap = useMemo(() => {
-    if (typeof window === "undefined") {
-      return { token: null as string | null, user: null as AuthUser | null };
-    }
-    return { token: getToken(), user: getStoredUser() };
-  }, []);
-
-  const [user, setUser] = useState<AuthUser | null>(bootstrap.user);
-  const [loading, setLoading] = useState(Boolean(bootstrap.token && bootstrap.user));
+  // SSR & first client render stay identical (user=null), then hydrate auth state on mount.
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [loading, setLoading] = useState(true);
 
   // On mount: restore session from localStorage and verify token
   useEffect(() => {
-    if (!bootstrap.token || !bootstrap.user) {
+    const token = getToken();
+    const stored = getStoredUser();
+
+    if (!token || !stored) {
+      queueMicrotask(() => setLoading(false));
       return;
     }
 
@@ -33,7 +31,7 @@ export function useAuth() {
         setUser(null);
       })
       .finally(() => setLoading(false));
-  }, [bootstrap.token, bootstrap.user]);
+  }, []);
 
   const handleLogin = useCallback(async (username: string, password: string) => {
     const res = await login(username, password);

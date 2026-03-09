@@ -22,14 +22,25 @@ class ToolCall(TypedDict):
 
 
 def merge_dicts(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
-    """通用 dict 合并 reducer：右侧覆盖左侧，用于并行 worker 写入。"""
+    """通用 dict 合并 reducer：右侧覆盖左侧，用于并行 worker 写入。
+    支持传入 {"__clear__": True, ...} 来清空旧状态。
+    """
+    if right is not None and right.get("__clear__", False):
+        new_dict = dict(right)
+        new_dict.pop("__clear__", None)
+        return new_dict
+    
     merged = dict(left or {})
     merged.update(right or {})
     return merged
 
 
 def concat_lists(left: Optional[List], right: Optional[List]) -> List:
-    """None 安全的列表拼接 reducer，防止 checkpointer 恢复时 left=None 报错。"""
+    """None 安全的列表拼接 reducer，防止 checkpointer 恢复时 left=None 报错。
+    支持传入 ["__clear__", ...] 来清空旧状态。
+    """
+    if right and right[0] == "__clear__":
+        return right[1:]
     return (left or []) + (right or [])
 
 
@@ -40,7 +51,12 @@ def take_last(left: Any, right: Any) -> Any:
 
 def set_union(left: Optional[List[str]], right: Optional[List[str]]) -> List[str]:
     """集合并集 reducer：合并两个列表，去重，顺序稳定。
-    用于并行 worker 同时向 ready_tasks 写入新解锁的任务 ID，防止重复。"""
+    用于并行 worker 同时向 ready_tasks 写入新解锁的任务 ID，防止重复。
+    支持传入 ["__clear__", ...] 来清空旧状态。
+    """
+    if right and "__clear__" in right:
+        return [x for x in right if x != "__clear__"]
+        
     base = list(left or [])
     seen = set(base)
     for item in (right or []):
@@ -66,13 +82,13 @@ class AgentState(TypedDict, total=False):
     current_task_id: Annotated[str, take_last]  # 支持并发更新
 
     # ── 任务图（planner 生成，controller 调度，worker 更新 status/result）
-    tasks: Annotated[Dict[str, TaskNode], merge_dicts]
+    tasks: Annotated[Dict[str, Any], merge_dicts]
 
     # ── 工具调用日志（worker 每次调用工具后追加）
-    tool_history: Annotated[List[ToolCall], concat_lists]
+    tool_history: Annotated[List[Any], concat_lists]
 
     # ── 任务执行结果（task_id → LLM 综合回答，reviewer 汇总用）
-    task_results: Annotated[Dict[str, str], merge_dicts]
+    task_results: Annotated[Dict[str, Any], merge_dicts]
 
     # ── 最终报告（reviewer / simple_chat 写入）
     final_report: str

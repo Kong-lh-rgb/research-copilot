@@ -4,7 +4,7 @@ import re
 from typing import Dict
 from app.llm.wrapper import call_llm
 from app.graph.state import AgentState, TaskNode
-from app.llm.prompts import PLANNER_PROMPTS
+from app.llm.prompt_manager import render
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +42,12 @@ async def planner_node(state: AgentState) -> dict:
         # 只取最近 10 条以提升速度（减少 token 数量）
         planner_messages = history[-10:] if history else [{"role": "user", "content": user_input}]
 
-        system = PLANNER_PROMPTS
+        system = render("planner")
         res = await call_llm(
             messages=planner_messages,
             system=system,
-            temperature=0.2  # 稍微提高温度以加快生成速度
+            role="planner",
+            temperature=0.2,
         )
         if res.get("error"):
             raise ValueError(res["error"])
