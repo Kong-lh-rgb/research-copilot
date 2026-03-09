@@ -28,7 +28,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 
 # ─── Pydantic schemas ──────────────────────────────────────────────────────────
-
+# 请求格式
 class RegisterRequest(BaseModel):
     username: str
     password: str
