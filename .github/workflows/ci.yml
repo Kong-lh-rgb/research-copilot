@@ -26,7 +26,7 @@ jobs:
           OPENAI_API_KEY: test-key
           OPENAI_MODEL: gpt-4o-mini
           OPENAI_BASE_URL: https://api.openai.com/v1
-        run: uv run pytest
+        run: uv run pytest -m "not integration"
 
   frontend:
     runs-on: ubuntu-latest
