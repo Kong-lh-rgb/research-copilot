@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from app.services.chat_explainability import build_tool_evidence_summary
-from app.services.chat_persistence import extract_user_id_from_token, save_turn_to_db
+from app.services.chat_persistence import extract_user_id_from_token, save_turn_to_db, load_thread_history
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +68,11 @@ async def _stream_chat_response(
         # ── 初始 Log ──────────────────────────────────────────────────────────
         queue.put_nowait({"type": "log", "message": "🤔 解析用户意图...", "level": "info"})
 
+        # ── 加载历史消息（上文记忆）─────────────────────────────────────────
+        history = await load_thread_history(thread_id)
+
         turn_state = {
-            "messages": [{"role": "user", "content": query}],
+            "messages": history + [{"role": "user", "content": query}],
             "user_input": query,
             "thread_id": thread_id,
             "tasks": {},
