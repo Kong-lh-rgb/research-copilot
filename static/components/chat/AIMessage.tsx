@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import { Copy } from "lucide-react";
+import { Copy, AlertCircle, StopCircle } from "lucide-react";
 import type { AiMessage } from "@/lib/types";
 import { ThinkingPanel } from "@/components/chat/ThinkingPanel";
 import { ToolCallCard } from "@/components/chat/ToolCallCard";
@@ -27,10 +27,31 @@ export function AIMessage({ message }: { message: AiMessage }) {
           <div className="rounded-2xl rounded-tl-sm border border-border/60 bg-card/80 px-4 py-3 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div className="flex-1">
-                <StreamingText 
-                  text={message.content || "AI 正在思考..."} 
-                  isStreaming={message.status === "streaming"} 
-                />
+                  {message.status === "error" ? (
+                    <div className="flex items-start gap-2 text-sm text-destructive">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{message.content || "请求失败，请检查邀请码或總试。"}</span>
+                    </div>
+                  ) : message.status === "thinking" && !message.content ? (
+                    <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                      <span className="flex gap-0.5">
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:0ms]" />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:150ms]" />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:300ms]" />
+                      </span>
+                      AI 正在思考…
+                    </span>
+                  ) : message.status === "done" && !message.content ? (
+                    <span className="flex items-center gap-1.5 text-sm text-muted-foreground/60">
+                      <StopCircle className="h-3.5 w-3.5" />
+                      已停止
+                    </span>
+                  ) : (
+                    <StreamingText
+                      text={message.content}
+                      isStreaming={message.status === "streaming"}
+                    />
+                  )}
               </div>
               {message.content && message.status === "done" && (
                 <Button

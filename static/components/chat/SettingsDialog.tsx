@@ -1,9 +1,12 @@
 "use client";
 
-import { X, Sun, Moon, Monitor } from "lucide-react";
+import { useEffect, useState } from "react";
+import { X, Sun, Moon, Monitor, KeyRound, Check } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { getAccessCode, setAccessCode } from "@/lib/api";
 
 type SettingsDialogProps = {
   open: boolean;
@@ -12,6 +15,19 @@ type SettingsDialogProps = {
 
 export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const { theme, setTheme } = useTheme();
+  const [code, setCode] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  // Load stored code when dialog opens
+  useEffect(() => {
+    if (open) setCode(getAccessCode());
+  }, [open]);
+
+  const handleSave = () => {
+    setAccessCode(code.trim());
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  };
 
   if (!open) return null;
 
@@ -26,7 +42,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
             <div>
               <CardTitle className="text-lg">设置</CardTitle>
               <CardDescription className="mt-1">
-                当前 Web 页面仅保留外观设置。
+                填写内部邀请码后才可发送请求。
               </CardDescription>
             </div>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onClose}>
@@ -36,6 +52,35 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
         </CardHeader>
 
         <CardContent className="space-y-6 py-6">
+          {/* ── 邀请码 ─────────────────────────────────────────────────────── */}
+          <section className="space-y-3">
+            <div>
+              <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                <KeyRound className="h-4 w-4" />
+                内部邀请码
+              </h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                每次发送对话请求时会附在请求头中，服务端校验通过后才会调用模型。
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                placeholder="请输入内部邀请码"
+                value={code}
+                onChange={(e) => { setCode(e.target.value); setSaved(false); }}
+                onKeyDown={(e) => e.key === "Enter" && handleSave()}
+                className="font-mono"
+                autoComplete="off"
+              />
+              <Button size="sm" onClick={handleSave} className="shrink-0 gap-1.5">
+                {saved ? <Check className="h-3.5 w-3.5" /> : null}
+                {saved ? "已保存" : "保存"}
+              </Button>
+            </div>
+          </section>
+
+          {/* ── 外观主题 ──────────────────────────────────────────────────── */}
           <section className="space-y-4">
             <div>
               <h3 className="text-sm font-semibold text-foreground">外观主题</h3>

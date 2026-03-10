@@ -1,9 +1,11 @@
 import asyncio
 import json
 import logging
+import os
 from typing import AsyncGenerator, Optional
 from uuid import uuid4
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from app.services.chat_explainability import build_tool_evidence_summary
 from app.services.chat_persistence import extract_user_id_from_token, save_turn_to_db, load_thread_history
@@ -266,6 +268,17 @@ async def _stream_chat_response(
 @router.post("/stream")
 async def chat_stream(request: Request, body: ChatRequest):
     from fastapi.responses import StreamingResponse
+
+    # ── 邀请码校验 ─────────────────────────────────────────────────────────────
+    access_code = os.environ.get("ACCESS_CODE", "").strip()
+    if access_code:
+        provided = request.headers.get("X-Access-Code", "").strip()
+        if provided != access_code:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "邀请码错误或未提供，请在设置中填写正确的邀请码。"},
+            )
+
     compiled_graph = request.app.state.compiled_graph
     thread_id = body.thread_id or f"web_{uuid4().hex}"
 

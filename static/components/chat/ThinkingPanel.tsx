@@ -12,6 +12,9 @@ type ThinkingPanelProps = {
 export function ThinkingPanel({ steps, collapsed, onToggle }: ThinkingPanelProps) {
   const hasSteps = steps.length > 0;
 
+  // 没有思考内容时不渲染
+  if (!hasSteps) return null;
+
   return (
     <Accordion type="single" collapsible value={collapsed ? "" : "thinking"} onValueChange={(value) => onToggle(value === "thinking")}
     >

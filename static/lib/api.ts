@@ -2,6 +2,20 @@ import type { AuthUser, BackendMessage, BackendThread, TokenResponse } from "@/l
 
 const TOKEN_KEY = "deep-researcher-auth-token";
 const USER_KEY = "deep-researcher-auth-user";
+const ACCESS_CODE_KEY = "deep-researcher-access-code";
+
+export function getAccessCode(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(ACCESS_CODE_KEY) ?? "";
+}
+
+export function setAccessCode(code: string): void {
+  window.localStorage.setItem(ACCESS_CODE_KEY, code);
+}
+
+export function removeAccessCode(): void {
+  window.localStorage.removeItem(ACCESS_CODE_KEY);
+}
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;

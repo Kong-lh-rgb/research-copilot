@@ -26,6 +26,7 @@ dependencies = [
     "python-jose[cryptography]>=3.5.0",
     "bcrypt>=5.0.0",
     "langsmith>=0.7.10",
+    "aiohttp>=3.13.3",
 ]
 
 [dependency-groups]

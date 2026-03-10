@@ -3,7 +3,7 @@
 import { flushSync } from "react-dom";
 import { useCallback, useRef, useState } from "react";
 import { mockStream } from "@/lib/mockStream";
-import { getToken } from "@/lib/api";
+import { getToken, getAccessCode } from "@/lib/api";
 import type { AiMessage, ChatMessage, HitlRequest, StreamEvent, TaskItem, ToolCall } from "@/lib/types";
 
 const createId = () => Math.random().toString(36).slice(2);
@@ -32,6 +32,17 @@ export function useChatStream() {
   const stop = useCallback(() => {
     controllerRef.current?.abort();
     stopRef.current = true;
+    setMessages((prev) => {
+      const lastThinkingIdx = prev.map((m, i) => ({ m, i })).reverse()
+        .find(({ m }) => m.role === "assistant" && (m as AiMessage).status === "thinking")?.i ?? -1;
+      if (lastThinkingIdx === -1) return prev;
+      const msg = prev[lastThinkingIdx] as AiMessage;
+      if (msg.status === "done" || msg.status === "error") return prev;
+      const next = [...prev];
+      next[lastThinkingIdx] = { ...msg, status: "done", content: msg.content || "（已停止）" };
+      activeMessageIdRef.current = null;
+      return next;
+    });
     setIsStreaming(false);
   }, []);
 
@@ -185,14 +196,13 @@ export function useChatStream() {
     setIsStreaming(true);
     stopRef.current = false;
 
+    // 先同步设置 ref，再传入 setMessages，确保 catch 块可以找到该消息
+    const aiMsg = emptyAiMessage();
+    activeMessageIdRef.current = aiMsg.id;
     setMessages((prev) => [
       ...prev,
       { id: createId(), role: "user", content: query },
-      (() => {
-        const message = emptyAiMessage();
-        activeMessageIdRef.current = message.id;
-        return message;
-      })(),
+      aiMsg,
     ]);
 
     try {
@@ -214,6 +224,8 @@ export function useChatStream() {
         const token = getToken();
         const headers: Record<string, string> = { "Content-Type": "application/json" };
         if (token) headers["Authorization"] = `Bearer ${token}`;
+        const accessCode = getAccessCode();
+        if (accessCode) headers["X-Access-Code"] = accessCode;
         const response = await fetch(streamUrl, {
           method: "POST",
           headers,
@@ -221,10 +233,16 @@ export function useChatStream() {
           signal: controllerRef.current.signal,
         });
 
-        if (!response.body) {
-          throw new Error("流式响应不可用");
+        if (!response.ok) {
+          let detail = response.statusText;
+          try {
+            const json = await response.json();
+            detail = json.detail ?? detail;
+          } catch { /* ignore */ }
+          throw new Error(detail);
         }
 
+        if (!response.body) throw new Error("流式响应不可用");
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -277,7 +295,23 @@ export function useChatStream() {
       }
       setIsStreaming(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "流式请求失败");
+      const isAbort = err instanceof Error && err.name === "AbortError";
+      const errorText = isAbort ? "" : (err instanceof Error ? err.message : "流式请求失败");
+      // 找最后一条 thinking 状态的 AI 消息，避免 id 查找在 React 批山操下失效
+      setMessages((prev) => {
+        const lastThinkingIdx = prev.map((m, i) => ({ m, i })).reverse()
+          .find(({ m }) => m.role === "assistant" && (m as AiMessage).status === "thinking")?.i ?? -1;
+        if (lastThinkingIdx === -1) return prev;
+        const msg = prev[lastThinkingIdx] as AiMessage;
+        const next = [...prev];
+        if (isAbort) {
+          next[lastThinkingIdx] = { ...msg, status: "done", content: msg.content || "（已停止）" };
+        } else {
+          next[lastThinkingIdx] = { ...msg, status: "error", content: errorText };
+        }
+        activeMessageIdRef.current = null;
+        return next;
+      });
       setIsStreaming(false);
     }
   }, [applyEvent]);
