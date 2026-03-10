@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { X, Sun, Moon, Monitor, KeyRound, Check } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
@@ -15,13 +15,8 @@ type SettingsDialogProps = {
 
 export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const { theme, setTheme } = useTheme();
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(() => getAccessCode());
   const [saved, setSaved] = useState(false);
-
-  // Load stored code when dialog opens
-  useEffect(() => {
-    if (open) setCode(getAccessCode());
-  }, [open]);
 
   const handleSave = () => {
     setAccessCode(code.trim());
