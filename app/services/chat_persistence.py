@@ -45,7 +45,8 @@ async def load_thread_history(thread_id: str) -> list[dict]:
 
     策略：
     - 始终逐字保留最近 _KEEP_RECENT 条消息（保证近期上下文完整）
-    - 超出部分调用 LLM 压缩为一条 system 摘要注入到列表最前面
+    - 超出部分优先使用 Thread 表中缓存的摘要（避免重复调用 LLM）
+    - 缓存过期（有新消息）时才重新生成摘要并写回数据库
     - 数据库不可用时安全返回空列表
     """
     try:
@@ -58,31 +59,65 @@ async def load_thread_history(thread_id: str) -> list[dict]:
 
         async with factory() as session:
             all_db = await repository.get_thread_messages(session, thread_id)
+            total_count = len(all_db)
 
-        # 从 DB 只取最近 _DB_FETCH_LIMIT 条（再早的历史价值低）
-        if len(all_db) > _DB_FETCH_LIMIT:
-            all_db = all_db[-_DB_FETCH_LIMIT:]
+            # 从 DB 只取最近 _DB_FETCH_LIMIT 条（再早的历史价值低）
+            if total_count > _DB_FETCH_LIMIT:
+                all_db = all_db[-_DB_FETCH_LIMIT:]
 
-        all_msgs = [{"role": m.role, "content": m.content} for m in all_db]
+            all_msgs = [{"role": m.role, "content": m.content} for m in all_db]
 
-        if len(all_msgs) <= _KEEP_RECENT:
-            # 消息不多，直接返回
-            return all_msgs
+            if len(all_msgs) <= _KEEP_RECENT:
+                # 消息不多，直接返回，不需要摘要
+                return all_msgs
 
-        # 分成「旧消息」和「近期消息」
-        older = all_msgs[:-_KEEP_RECENT]
-        recent = all_msgs[-_KEEP_RECENT:]
+            # 分成「旧消息」和「近期消息」
+            older = all_msgs[:-_KEEP_RECENT]
+            recent = all_msgs[-_KEEP_RECENT:]
 
-        summary_text = await _summarize_messages(older)
-        if summary_text:
-            summary_msg = {
-                "role": "system",
-                "content": f"【早期对话摘要】{summary_text}",
-            }
-            return [summary_msg] + recent
-        else:
-            # 摘要失败，退化为只保留近期消息
-            return recent
+            # ── 检查缓存摘要是否可用 ──
+            cached_summary, cached_count = await repository.get_thread_summary(
+                session, thread_id
+            )
+
+            if cached_summary and cached_count == total_count:
+                # 缓存命中：自上次摘要后没有新消息，直接复用
+                logger.info(
+                    f"[HistoryCompressor] 缓存命中 (thread={thread_id}, "
+                    f"msg_count={total_count})，跳过 LLM 调用"
+                )
+                summary_msg = {
+                    "role": "system",
+                    "content": f"【早期对话摘要】{cached_summary}",
+                }
+                return [summary_msg] + recent
+
+            # ── 缓存未命中：调用 LLM 生成新摘要 ──
+            logger.info(
+                f"[HistoryCompressor] 缓存未命中 (thread={thread_id}, "
+                f"cached_count={cached_count}, current_count={total_count})，"
+                f"生成新摘要..."
+            )
+            summary_text = await _summarize_messages(older)
+
+            if summary_text:
+                # 写回缓存
+                await repository.update_thread_summary(
+                    session, thread_id, summary_text, total_count
+                )
+                await session.commit()
+                logger.info(
+                    f"[HistoryCompressor] 新摘要已缓存 "
+                    f"(thread={thread_id}, msg_count={total_count})"
+                )
+                summary_msg = {
+                    "role": "system",
+                    "content": f"【早期对话摘要】{summary_text}",
+                }
+                return [summary_msg] + recent
+            else:
+                # 摘要生成失败，退化为只保留近期消息
+                return recent
 
     except Exception as e:
         logger.warning(f"[load_thread_history] 加载失败: {e}")

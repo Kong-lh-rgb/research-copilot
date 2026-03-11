@@ -34,6 +34,10 @@ class Thread(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    # ── 摘要缓存：避免每次请求都调用 LLM 做历史压缩 ──
+    summary = Column(Text, nullable=True)            # 缓存的摘要文本
+    summary_msg_count = Column(Integer, nullable=True)  # 生成摘要时的消息总数（用于判断缓存是否过期）
+
     user = relationship("User", back_populates="threads")
     messages = relationship(
         "Message",

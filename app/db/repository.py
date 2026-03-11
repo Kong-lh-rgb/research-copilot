@@ -121,3 +121,45 @@ async def get_thread_messages(
         .order_by(Message.created_at.asc())
     )
     return list(result.scalars().all())
+
+
+async def get_message_count(
+    session: AsyncSession, thread_id: str
+) -> int:
+    """返回指定 thread 的消息总数。"""
+    from sqlalchemy import func
+    result = await session.execute(
+        select(func.count()).select_from(Message).where(Message.thread_id == thread_id)
+    )
+    return result.scalar() or 0
+
+
+# ─── Thread Summary Cache ──────────────────────────────────────────────────────
+
+async def get_thread_summary(
+    session: AsyncSession, thread_id: str
+) -> tuple[Optional[str], Optional[int]]:
+    """返回 (cached_summary, summary_msg_count)。未缓存时都为 None。"""
+    result = await session.execute(
+        select(Thread.summary, Thread.summary_msg_count)
+        .where(Thread.id == thread_id)
+    )
+    row = result.one_or_none()
+    if row is None:
+        return None, None
+    return row.summary, row.summary_msg_count
+
+
+async def update_thread_summary(
+    session: AsyncSession,
+    thread_id: str,
+    summary: str,
+    msg_count: int,
+) -> None:
+    """将 LLM 生成的摘要缓存回 Thread 表。"""
+    await session.execute(
+        update(Thread)
+        .where(Thread.id == thread_id)
+        .values(summary=summary, summary_msg_count=msg_count)
+    )
+
