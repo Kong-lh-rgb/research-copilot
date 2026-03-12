@@ -27,6 +27,7 @@ dependencies = [
     "bcrypt>=5.0.0",
     "langsmith>=0.7.10",
     "aiohttp>=3.13.3",
+    "tavily-python>=0.7.23",
 ]
 
 [dependency-groups]

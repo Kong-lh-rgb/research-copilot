@@ -91,7 +91,7 @@ class AgentState(TypedDict, total=False):
     task_results: Annotated[Dict[str, Any], merge_dicts]
 
     # ── 最终报告（reviewer / simple_chat 写入）
-    final_report: str
+    final_report: Annotated[str, take_last]
 
     # ── 任务调度队列（planner 初始化，worker 完成后更新）
     # set_union 保证并行 worker 同时写入时不产生重复 ID
