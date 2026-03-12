@@ -457,7 +457,115 @@ def get_financial_report(
         return json.dumps({"error": f"获取财报失败: {e}"}, ensure_ascii=False)
 
 
-# ─── 邮件：HTML 模板 ─────────────────────────────────────────────────────────
+# ─── MCP 工具：股票筛选 (选股) ──────────────────────────────────────────────────
+
+@mcp.tool()
+def screen_stocks(
+    max_price: float = None,
+    min_price: float = None,
+    max_pe: float = None,
+    min_pe: float = None,
+    max_pb: float = None,
+    min_pb: float = None,
+    limit: int = 20
+) -> str:
+    """
+    根据条件筛选符合要求的A股股票池（基于AkShare提供的实时行情指标）。
+    非常适合用于“寻找低价股”、“寻找低估值(PE/PB)股票”等需求。
+
+    参数:
+        max_price: 最高股价 (元)，例如 5.0 表示查找5元以下的低价股
+        min_price: 最低股价 (元)
+        max_pe: 最高市盈率 (PE, 动), 例如 30.0 表示剔除高估值
+        min_pe: 最低市盈率, 如果要剔除亏损股可以设为 0.01
+        max_pb: 最高市净率 (PB)
+        min_pb: 最低市净率
+        limit: 返回的股票数量上限，默认 20 只
+    """
+    try:
+        import akshare as ak
+        import datetime
+        
+        # 获取最新的A股所有股票实时行情
+        # 这个接口包含 最新价、市盈率-动态、市净率等字段
+        df = ak.stock_zh_a_spot_em()
+        
+        if df is None or df.empty:
+            return json.dumps({"error": "未能获取到实时板块数据，请稍后再试。"}, ensure_ascii=False)
+            
+        # 字段映射方便处理
+        # 东方财富实时接口字段: 
+        # '代码', '名称', '最新价', '涨跌额', '涨跌幅', '成交量', '成交额', '振幅', '最高', '最低', '今开', '昨收', '量比', '换手率', '市盈率-动态', '市净率', '总市值', '流通市值'
+        
+        # 清洗数据，将 "-" 转为空值并转为数字
+        df['最新价'] = pd.to_numeric(df['最新价'], errors='coerce')
+        df['市盈率-动态'] = pd.to_numeric(df['市盈率-动态'], errors='coerce')
+        df['市净率'] = pd.to_numeric(df['市净率'], errors='coerce')
+        df['总市值'] = pd.to_numeric(df['总市值'], errors='coerce')
+        
+        target_date = datetime.date.today().strftime("%Y%m%d")
+        
+        # 依次应用筛选条件
+        if max_price is not None:
+            df = df[df['最新价'] <= max_price]
+        if min_price is not None:
+            df = df[df['最新价'] >= min_price]
+            
+        if max_pe is not None:
+            df = df[df['市盈率-动态'] <= max_pe]
+        if min_pe is not None:
+            df = df[df['市盈率-动态'] >= min_pe]
+            
+        if max_pb is not None:
+            df = df[df['市净率'] <= max_pb]
+        if min_pb is not None:
+            df = df[df['市净率'] >= min_pb]
+            
+        # 按市值从大到小排序，优先返回大盘股 (排除没有市值的退市股)
+        df = df.dropna(subset=['总市值'])
+        df = df.sort_values(by="总市值", ascending=False)
+        
+        # 截取结果
+        result_df = df.head(limit).copy()
+        
+        if result_df.empty:
+            return json.dumps({"message": "没有找到符合条件的股票。"}, ensure_ascii=False)
+            
+        result_df = result_df.fillna("")
+        result_df = result_df.rename(columns={
+            "代码": "股票代码",
+            "名称": "股票名称"
+        })
+        
+        # 计算 TS代码 格式
+        def _to_ts_code(code):
+            c = str(code)
+            if c.startswith(('6', '9')): return f"{c}.SH"
+            if c.startswith(('8', '4')): return f"{c}.BJ"
+            return f"{c}.SZ"
+            
+        result_df['TS代码'] = result_df['股票代码'].apply(_to_ts_code)
+        # 将市值转为万元单位以便配合之前的结构(akshare原本单位是元)
+        result_df['总市值(万元)'] = (pd.to_numeric(result_df['总市值'], errors='coerce') / 10000).round(2)
+        result_df['动态市盈率PE'] = result_df['市盈率-动态']
+        result_df['市净率PB'] = result_df['市净率']
+        
+        # 只取需要的列
+        cols = ["股票代码", "股票名称", "最新价", "动态市盈率PE", "市净率PB", "总市值(万元)", "TS代码"]
+        # 给“最新价”重命名为“最新收盘价”保持兼容
+        result_df = result_df.rename(columns={"最新价": "最新收盘价"})
+        cols = ["股票代码", "股票名称", "最新收盘价", "动态市盈率PE", "市净率PB", "总市值(万元)", "TS代码"]
+        
+        rows = result_df[cols].to_dict(orient="records")
+        
+        return json.dumps({
+            "count": len(rows),
+            "date": target_date,
+            "stocks": rows
+        }, ensure_ascii=False, default=str)
+        
+    except Exception as e:
+        return json.dumps({"error": f"筛选股票池失败: {str(e)}"}, ensure_ascii=False)
 
 # 邮件 HTML 外壳样式
 _EMAIL_CSS = """

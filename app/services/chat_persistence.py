@@ -6,9 +6,9 @@ logger = logging.getLogger(__name__)
 
 # ── 历史压缩策略常量 ───────────────────────────────────────────────────────────
 # 始终逐字保留最近 N 条消息（user+assistant 各算一条）
-_KEEP_RECENT = 6
+_KEEP_RECENT = 20
 # 从 DB 最多取多少条历史（再往前的直接丢弃，不值得摘要）
-_DB_FETCH_LIMIT = 40
+_DB_FETCH_LIMIT = 60
 
 
 async def _summarize_messages(messages: list[dict]) -> str:
