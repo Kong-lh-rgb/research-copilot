@@ -22,7 +22,7 @@
 |---|---|
 | **finance-mcp**（本地） | A 股实时行情、K 线、利润表 / 资产负债表 / 现金流量表（Tushare Pro） |
 | **amap-maps** | 高德地图 POI 搜索、路线规划 |
-| **brave-search** | 网页搜索 |
+| **tavily-search** | 网页搜索 |
 | **send_email** | 将研报渲染为 HTML 邮件发送 |
 
 工具通过 [MCP 协议](https://modelcontextprotocol.io)接入，新增工具只需在 `mcp_servers.json` 增加一条配置。
@@ -138,7 +138,7 @@ npm run dev
 | `SENDER_EMAIL` / `SENDER_PASSWORD` | 163 邮箱发送（需在邮箱设置中开启 SMTP 授权码） |
 | `TUSHARE_TOKEN` | Tushare Pro 财务数据接口 |
 | `AMAP_MAPS_API_KEY` | 高德地图 MCP |
-| `BRAVE_API_KEY` | Brave Search MCP |
+| `TAVILY_API_KEY` | Tavily 网页搜索 MCP |
 | `LANGSMITH_TRACING` | `true` 开启 LangSmith 链路追踪 |
 | `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` | LangSmith 配置 |
 
