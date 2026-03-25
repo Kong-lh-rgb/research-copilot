@@ -2,17 +2,19 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# 安装 uv（比 pip 快很多）
-RUN pip install uv
+# 【加速优化 1】把 Debian 系统软件源换成阿里云源（解决 apt-get 卡住）
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || true \
+    && sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list || true
 
-# 先只复制依赖文件，利用 Docker 层缓存
+# 【加速优化 2】设置 uv 和 pip 的国内镜像源（解决 Python 包卡住）
+ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+RUN pip install uv -i https://mirrors.aliyun.com/pypi/simple/
+
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
-# 复制项目代码
 COPY app/ ./app/
 
-# Node.js（MCP amap/brave 工具需要 npx）
 RUN apt-get update && apt-get install -y nodejs npm && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 8000
