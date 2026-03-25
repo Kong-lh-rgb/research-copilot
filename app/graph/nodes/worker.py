@@ -3,7 +3,7 @@ import json
 import logging
 from typing import List
 from langchain_core.runnables import RunnableConfig
-from app.llm.wrapper import call_llm, mcp_tools_to_openai_tools
+from app.llm.wrapper import call_llm, call_llm_stream, mcp_tools_to_openai_tools
 from app.graph.state import AgentState, ToolCall
 from app.infrastructure.setup import tool_registry
 from app.llm.prompt_manager import render
@@ -163,16 +163,48 @@ async def worker_node(state: AgentState, config: RunnableConfig) -> dict:
             # 添加 LLM 调用超时保护
             try:
                 logger.debug(f"💭 [Worker] 等待 LLM 响应... (最长 {LLM_CALL_TIMEOUT}s)")
-                result = await asyncio.wait_for(
-                    call_llm(
-                        messages=messages,
-                        system=system,
-                        tools=openai_tools if openai_tools else None,
-                        temperature=0.1,
-                        role="worker",
-                    ),
-                    timeout=LLM_CALL_TIMEOUT
-                )
+                full_content = ""
+                tool_calls = None
+                error_msg = None
+                
+                async def stream_and_collect():
+                    nonlocal full_content, tool_calls, error_msg
+                    try:
+                        async for chunk in call_llm_stream(
+                            messages=messages,
+                            system=system,
+                            tools=openai_tools if openai_tools else None,
+                            temperature=0.1,
+                            role="worker",
+                        ):
+                            if chunk.get("done"):
+                                tool_calls = chunk.get("tool_calls")
+                                if chunk.get("error"):
+                                    error_msg = chunk.get("error")
+                                break
+                            
+                            c = chunk.get("content", "")
+                            t = chunk.get("thinking", "")
+                            if c:
+                                full_content += c
+                                if stream_queue:
+                                    # 用 thinking_token 传出，以和最终生成的 content_token 区分
+                                    stream_queue.put_nowait({"type": "thinking_token", "delta": c})
+                                    await asyncio.sleep(0)
+                            if t:
+                                if stream_queue:
+                                    stream_queue.put_nowait({"type": "thinking_token", "delta": t})
+                                    await asyncio.sleep(0)
+                    except Exception as e:
+                        error_msg = str(e)
+                
+                await asyncio.wait_for(stream_and_collect(), timeout=LLM_CALL_TIMEOUT)
+                
+                if error_msg:
+                    raise ValueError(error_msg)
+                
+                result = {"content": full_content, "tool_calls": tool_calls}
+                
             except asyncio.TimeoutError:
                 error_msg = f"LLM调用超时（{LLM_CALL_TIMEOUT}秒）"
                 logger.error(f"⏱️ [Worker] 任务 {task_id} 第 {round_idx + 1} 轮 - {error_msg}")

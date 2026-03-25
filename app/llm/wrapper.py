@@ -22,7 +22,7 @@ async def call_llm(
         response = await client.chat(
             messages=request_messages,
             tools=tools or None,
-            tool_choice=tool_choice,
+            tool_choice=tool_choice or ("auto" if tools else None),
             temperature=temperature,
             model=model,
         )
@@ -46,6 +46,7 @@ async def call_llm_stream(
     temperature: float = 0,
     model: Optional[str] = None,
     role: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """流式调用 LLM"""
     client = get_llm_for_role(role) if role else get_llm()
@@ -57,6 +58,8 @@ async def call_llm_stream(
     try:
         async for chunk in client.chat_stream(
             messages=request_messages,
+            tools=tools,
+            tool_choice="auto" if tools else None,
             temperature=temperature,
             model=model,
         ):

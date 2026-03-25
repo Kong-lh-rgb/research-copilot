@@ -28,6 +28,45 @@ class LLMConfigError(RuntimeError):
     pass
 
 
+def _sanitize_thinking_content(thinking: str) -> str:
+    """对思考过程进行脱敏，隐藏工具调用细节和敏感信息"""
+    import re
+    if not thinking:
+        return thinking
+    
+    # 隐藏工具调用的细节（例如：function_call: {name: "xxx", arguments: {...}}）
+    thinking = re.sub(
+        r'"?function_call"?\s*:\s*\{[^}]*\}',
+        '[工具调用]',
+        thinking,
+        flags=re.IGNORECASE
+    )
+    
+    # 隐藏 tool_calls 中的工具名和参数
+    thinking = re.sub(
+        r'"?name"?\s*:\s*"[^"]*"',
+        '"name": "[已隐藏]"',
+        thinking,
+        flags=re.IGNORECASE
+    )
+    thinking = re.sub(
+        r'"?arguments"?\s*:\s*\{[^}]*\}',
+        '"arguments": "[已隐藏]"',
+        thinking,
+        flags=re.IGNORECASE
+    )
+    
+    # 隐藏具体的工具名（例如 tavily_search, get_stock_history 等）
+    thinking = re.sub(
+        r'\b(tavily_search|get_stock_history|get_financial_\w+|send_email|send_wechat|maps_\w+|screen_stocks)\b',
+        '[工具]',
+        thinking,
+        flags=re.IGNORECASE
+    )
+    
+    return thinking
+
+
 class LLMClient:
     def __init__(
         self,
@@ -163,6 +202,7 @@ class LLMClient:
 
             # 2. yield 文本 / 思考内容
             thinking_delta = getattr(delta, "reasoning_content", None) or ""
+            thinking_delta = _sanitize_thinking_content(thinking_delta)  # 脱敏工具调用细节
             content_delta  = delta.content or ""
             if thinking_delta or content_delta:
                 yield {"thinking": thinking_delta, "content": content_delta, "done": False}

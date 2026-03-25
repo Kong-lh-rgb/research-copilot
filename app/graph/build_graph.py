@@ -21,7 +21,47 @@ def router_after_controller(state: AgentState) -> str:
         return "simple_chat"
 
 def resumer_node(state: AgentState) -> dict:
-    return {}
+    """恢复被中断的任务执行。
+    
+    将 running 任务改为 pending，以便 Distributor 能派发它们重新执行。
+    """
+    tasks = state.get("tasks") or {}
+    
+    # 统计任务状态
+    running_tasks = [tid for tid, t in tasks.items() if getattr(t, "status", "") == "running"]
+    pending_tasks = [tid for tid, t in tasks.items() if getattr(t, "status", "") == "pending"]
+    completed = [tid for tid, t in tasks.items() if getattr(t, "status", "") == "completed"]
+    
+    logger.info(f"🔄 [Resumer] 恢复被中断任务: {len(running_tasks)} running → pending, {len(pending_tasks)} pending, {len(completed)} completed")
+    
+    # ⚠️ 关键：将所有 running 任务改为 pending，以便重新派发
+    for tid in running_tasks:
+        task = tasks[tid]
+        task.status = "pending"
+        logger.info(f"  ↩️ {tid}: running → pending")
+    
+    # 计算现在有哪些任务可以执行（依赖都已完成）
+    ready_tasks = []
+    for tid in running_tasks + pending_tasks:
+        task = tasks.get(tid)
+        if not task:
+            continue
+        
+        # 获取任务的依赖列表
+        dependencies = getattr(task, "dependencies", None) or []
+        
+        # 检查所有依赖是否已完成
+        if all(dep in completed for dep in dependencies):
+            ready_tasks.append(tid)
+            logger.info(f"  ✓ {tid} 可就绪（依赖已满足）")
+        else:
+            waiting = [dep for dep in dependencies if dep not in completed]
+            logger.info(f"  ⏳ {tid} 等待依赖：{waiting}")
+    
+    return {
+        "tasks": tasks,  # 返回修改后的 tasks（running 改为 pending）
+        "ready_tasks": ready_tasks
+    }
 
 def distribute_tasks(state: AgentState):
     """基于 ready_tasks 队列派发 worker，O(k)（k = 当前就绪任务数）。

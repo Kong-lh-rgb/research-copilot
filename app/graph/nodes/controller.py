@@ -28,8 +28,23 @@ async def controller_node(state: AgentState) -> dict:
     logger.info(f"接收用户请求：{user_input}")
 
     tasks = state.get("tasks") or {}
+    logger.info(f"[Controller] 当前 tasks 数: {len(tasks)}")
+    for tid, t in tasks.items():
+        status = getattr(t, "status", "?")
+        logger.info(f"[Controller]   - {tid}: {status}")
+    
+    # ── 优先级 1：检查是否有 running 或 suspended 的任务 ──
+    # 如果有，说明这是在恢复之前的执行，不应该重新分析意图
+    running_tasks = {tid: t for tid, t in tasks.items() if getattr(t, "status", "") == "running"}
     suspended_tasks = {tid: t for tid, t in tasks.items() if getattr(t, "status", "") == "suspended"}
-
+    
+    if running_tasks:
+        logger.info(f"🔄 [Controller] 发现 {len(running_tasks)} 个 running 任务，继续执行而不重新分析")
+        return {
+            "next_action": "resume_research",
+            "ready_tasks": [],  # 由 Distributor 重新计算就绪任务
+        }
+    
     if suspended_tasks:
         logger.info(f"🔄 发现挂起任务: {list(suspended_tasks.keys())}，将尝试以用户输入恢复执行")
         updates = {}
@@ -44,6 +59,18 @@ async def controller_node(state: AgentState) -> dict:
             "ready_tasks": list(suspended_tasks.keys())
         }
 
+    # ── 优先级 2：检查是否所有任务都已完成或失败，清除保存的任务状态 ──
+    completed = sum(1 for t in tasks.values() if getattr(t, "status", "") == "completed")
+    failed = sum(1 for t in tasks.values() if getattr(t, "status", "") == "failed")
+    if tasks and completed + failed >= len(tasks):
+        # 所有任务已完成或失败，清除保存的状态
+        from app.services.chat_persistence import clear_task_state
+        thread_id = state.get("thread_id", "")
+        if thread_id:
+            clear_task_state(thread_id)
+            logger.info(f"✨ 所有任务已完成，清除已保存的任务状态 (thread={thread_id})")
+
+    # ── 优先级 3：没有任何进行中的任务，进行新的意图分析 ──
     try:
         system_prompt = render("controller")
         res = await call_llm(

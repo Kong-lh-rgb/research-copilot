@@ -8,7 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from app.services.chat_explainability import build_tool_evidence_summary
-from app.services.chat_persistence import extract_user_id_from_token, save_turn_to_db, load_thread_history
+from app.services.chat_persistence import extract_user_id_from_token, save_turn_to_db, load_thread_history, load_task_state, save_task_state, clear_task_state
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ async def _stream_chat_response(
     compiled_graph,
     query: str,
     thread_id: str,
+    query_id: str,
     reply_holder: Optional[list] = None,
     trace_user_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
@@ -72,12 +73,19 @@ async def _stream_chat_response(
 
         # ── 加载历史消息（上文记忆）─────────────────────────────────────────
         history = await load_thread_history(thread_id)
+        
+        # ── 加载之前保存的任务状态（用于恢复挂起任务）──────────────────────
+        persisted_tasks = load_task_state(thread_id)
+        logger.info(f"[Chat] 已加载保存的任务状态: 共 {len(persisted_tasks)} 个任务")
+        for tid, t in persisted_tasks.items():
+            status = getattr(t, "status", "?")
+            logger.info(f"[Chat]   - {tid}: {status}")
 
         turn_state = {
-            "messages": history + [{"role": "user", "content": query}],
+            "messages": history + [{"id": query_id, "role": "user", "content": query}],
             "user_input": query,
             "thread_id": thread_id,
-            "tasks": {},
+            "tasks": persisted_tasks or {},  # 如果有保存的任务状态则恢复，否则为空
             "next_action": "",
             "tool_history": [],
             "task_results": {},
@@ -92,7 +100,7 @@ async def _stream_chat_response(
         graph_done = asyncio.Event()
 
         async def _run_graph():
-            nonlocal final_reply
+            nonlocal final_reply, turn_state
             try:
                 # 监听 LangGraph 每一个步骤
                 async for step in compiled_graph.astream(
@@ -118,8 +126,10 @@ async def _stream_chat_response(
                             continue
                         if not isinstance(node_output, dict):
                             continue
-
-                        # ── 节点状态映射到 SSE 事件 ──
+                        
+                        # ⚠️ 关键：每步后更新 turn_state，确保保存最新的任务状态
+                        if "tasks" in node_output:
+                            turn_state["tasks"] = node_output.get("tasks", turn_state.get("tasks", {}))
                         if node_name == "controller":
                             if "next_action" in node_output:
                                 action = node_output["next_action"]
@@ -216,6 +226,9 @@ async def _stream_chat_response(
                 logger.error(f"Graph run error: {e}", exc_info=True)
                 queue.put_nowait({"type": "error", "message": f"执行出错: {str(e)}"})
             finally:
+                # 保存任务状态，以便用户补充信息后恢复
+                if turn_state and "tasks" in turn_state:
+                    save_task_state(thread_id, turn_state["tasks"])
                 graph_done.set()
 
         async def _drain():
@@ -227,10 +240,15 @@ async def _stream_chat_response(
                     # 超时检查退出条件
                     if graph_done.is_set() and queue.empty():
                         break
+                    if await request.is_disconnected():
+                        logger.warning(f"⚠️ [Chat] 检测到客户端已主动断开 (线程 {thread_id})")
+                        break
                     continue
 
                 if item is None:
                     continue
+                if await request.is_disconnected():
+                    break
                 # ⚠️ 返回纯 JSON，不添加 SSE 前缀（统一由外层 generate() 处理）
                 yield json.dumps(item, ensure_ascii=False)
                 # 让事件循环有机会把 HTTP 写缓冲区刷新到网络，
@@ -240,10 +258,28 @@ async def _stream_chat_response(
         # 运行图并分发事件
         graph_task = asyncio.create_task(_run_graph())
 
-        async for raw_json in _drain():
-            yield raw_json
+        try:
+            async for raw_json in _drain():
+                yield raw_json
+        finally:
+            if not graph_task.done():
+                logger.warning(f"🛑 [Chat] 客户端已断开，停止后台任务，同时保存当前任务状态...")
+                # ⚠️ 关键：在 cancel 前立即保存任务状态
+                if turn_state and "tasks" in turn_state:
+                    save_task_state(thread_id, turn_state["tasks"])
+                    logger.info(f"💾 [Chat] 任务状态已在 cancel 前保存 (thread={thread_id})")
+                
+                graph_task.cancel()
+                try:
+                    await graph_task
+                except asyncio.CancelledError:
+                    pass
 
-        await graph_task
+        if not graph_task.cancelled():
+            try:
+                await graph_task
+            except asyncio.CancelledError:
+                pass
 
         # 只有在最终没有 content_token 推送内容时，才做 final 兜底（由前端保证不重复渲染）
         if final_reply:
@@ -281,6 +317,16 @@ async def chat_stream(request: Request, body: ChatRequest):
 
     compiled_graph = request.app.state.compiled_graph
     thread_id = body.thread_id or f"web_{uuid4().hex}"
+    
+    # 防止并发写入产生 Checkpoint 数据错乱和 Queue 覆盖
+    if thread_id in request.app.state.stream_queues:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=409,
+            detail="当前对话正在处理中，请等待完成后再发送新消息。"
+        )
+    
+    query_id = f"query_{uuid4().hex}"
 
     # Extract optional Bearer token for per-user message persistence
     auth_header = request.headers.get("Authorization", "")
@@ -298,6 +344,7 @@ async def chat_stream(request: Request, body: ChatRequest):
             compiled_graph,
             body.query,
             thread_id,
+            query_id,
             reply_holder,
             trace_user_id,
         ):

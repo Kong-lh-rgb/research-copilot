@@ -1,8 +1,12 @@
 import logging
 import uuid as _uuid
 from typing import Optional
+import json
 
 logger = logging.getLogger(__name__)
+
+# ── 内存存储：保存每个 thread 的任务状态，用于恢复挂起任务 ──
+_thread_task_states: dict[str, dict] = {}
 
 # ── 历史压缩策略常量 ───────────────────────────────────────────────────────────
 # 始终逐字保留最近 N 条消息（user+assistant 各算一条）
@@ -65,7 +69,7 @@ async def load_thread_history(thread_id: str) -> list[dict]:
             if total_count > _DB_FETCH_LIMIT:
                 all_db = all_db[-_DB_FETCH_LIMIT:]
 
-            all_msgs = [{"role": m.role, "content": m.content} for m in all_db]
+            all_msgs = [{"id": f"msg_{m.id}", "role": m.role, "content": m.content} for m in all_db]
 
             if len(all_msgs) <= _KEEP_RECENT:
                 # 消息不多，直接返回，不需要摘要
@@ -87,6 +91,7 @@ async def load_thread_history(thread_id: str) -> list[dict]:
                     f"msg_count={total_count})，跳过 LLM 调用"
                 )
                 summary_msg = {
+                    "id": f"summary_{thread_id}",
                     "role": "system",
                     "content": f"【早期对话摘要】{cached_summary}",
                 }
@@ -111,6 +116,7 @@ async def load_thread_history(thread_id: str) -> list[dict]:
                     f"(thread={thread_id}, msg_count={total_count})"
                 )
                 summary_msg = {
+                    "id": f"summary_{thread_id}",
                     "role": "system",
                     "content": f"【早期对话摘要】{summary_text}",
                 }
@@ -169,3 +175,66 @@ async def save_turn_to_db(
             await repository.add_message(session, thread_id, "assistant", assistant_reply)
         await repository.touch_thread(session, thread_id)
         await session.commit()
+
+
+# ── 任务状态持久化：在内存中保存/加载任务状态 ──────────────────────────────────
+
+def save_task_state(thread_id: str, tasks: dict) -> None:
+    """保存任务状态到内存，用于后续恢复"""
+    try:
+        # 将任务对象转换为可序列化的字典
+        serialized_tasks = {}
+        for task_id, task_obj in tasks.items():
+            # 支持 TaskNode 对象和字典两种格式
+            if isinstance(task_obj, dict):
+                # 已经是字典，直接使用
+                serialized_tasks[task_id] = task_obj
+            else:
+                # 是 TaskNode 对象，提取属性
+                serialized_tasks[task_id] = {
+                    "task_id": getattr(task_obj, "task_id", task_id),
+                    "description": getattr(task_obj, "description", ""),
+                    "status": getattr(task_obj, "status", "pending"),
+                    "result": getattr(task_obj, "result", None),
+                    "error": getattr(task_obj, "error", None),
+                    "dependencies": getattr(task_obj, "dependencies", None),
+                }
+        _thread_task_states[thread_id] = serialized_tasks
+        
+        # 统计各状态任务数
+        status_counts = {}
+        for t in serialized_tasks.values():
+            s = t.get("status", "unknown")
+            status_counts[s] = status_counts.get(s, 0) + 1
+        
+        logger.info(f"💾 [TaskState] 已保存 {len(serialized_tasks)} 个任务 (thread={thread_id}), 状态分布: {status_counts}")
+    except Exception as e:
+        logger.error(f"[TaskState] 保存失败: {e}", exc_info=True)
+
+
+def load_task_state(thread_id: str) -> dict:
+    """从内存加载之前保存的任务状态，转换为 TaskNode 对象"""
+    try:
+        if thread_id not in _thread_task_states:
+            return {}
+        
+        from app.graph.state import TaskNode
+        
+        state_dict = _thread_task_states[thread_id]
+        tasks = {}
+        for task_id, task_data in state_dict.items():
+            # 将字典转换为 TaskNode 对象
+            tasks[task_id] = TaskNode(**task_data)
+        
+        logger.debug(f"📂 [TaskState] 已恢复 {len(tasks)} 个任务状态 (thread={thread_id})")
+        return tasks
+    except Exception as e:
+        logger.warning(f"[TaskState] 加载失败: {e}")
+        return {}
+
+
+def clear_task_state(thread_id: str) -> None:
+    """清除已保存的任务状态"""
+    if thread_id in _thread_task_states:
+        _thread_task_states.pop(thread_id, None)
+        logger.debug(f"🗑️ [TaskState] 已清除任务状态 (thread={thread_id})")
