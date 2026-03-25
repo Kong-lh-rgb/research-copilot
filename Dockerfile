@@ -2,16 +2,24 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# 【加速优化 1】把 Debian 系统软件源换成阿里云源（解决 apt-get 卡住）
+# 1. Debian 系统镜像源
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || true \
     && sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list || true
 
-# 【加速优化 2】设置 uv 和 pip 的国内镜像源（解决 Python 包卡住）
-ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/
+# 2. Python 包镜像源
+ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+
+# 🚨【关键修复 1】：限制同时下载的数量为 2 个（默认是几十个），防止触发服务器并发防火墙
+ENV UV_CONCURRENT_DOWNLOADS=2
+# 🚨【关键修复 2】：把默认超时时间延长到 300 秒，允许大文件（如 curl-cffi）慢慢下
+ENV UV_HTTP_TIMEOUT=300
+
 RUN pip install uv -i https://mirrors.aliyun.com/pypi/simple/
 
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+
+# 🚨【关键修复 3】：加上 -v 参数，让它打印详细下载日志，不再“静默卡死”
+RUN uv sync --frozen --no-dev -v
 
 COPY app/ ./app/
 
