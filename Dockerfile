@@ -7,7 +7,7 @@ RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debia
     && sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list || true
 
 # 2. Python 包镜像源
-ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/
 
 # 🚨【关键修复 1】：限制同时下载的数量为 2 个（默认是几十个），防止触发服务器并发防火墙
 ENV UV_CONCURRENT_DOWNLOADS=2
@@ -19,7 +19,7 @@ RUN pip install uv -i https://mirrors.aliyun.com/pypi/simple/
 COPY pyproject.toml uv.lock ./
 
 # 🚨【关键修复 3】：加上 -v 参数，让它打印详细下载日志，不再“静默卡死”
-RUN uv sync --frozen --no-dev -v
+RUN uv sync  --no-dev -v
 
 COPY app/ ./app/
 
