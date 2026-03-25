@@ -7,7 +7,7 @@ RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debia
     && sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list || true
 
 # 【加速优化 2】设置 uv 和 pip 的国内镜像源（解决 Python 包卡住）
-ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/
 RUN pip install uv -i https://mirrors.aliyun.com/pypi/simple/
 
 COPY pyproject.toml uv.lock ./
